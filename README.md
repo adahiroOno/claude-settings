@@ -31,6 +31,8 @@ claude-settings/
 │   │   └── handoff-notice.sh         # /clear後の作業再開(ハンドオフ検知・低コスト)
 │   ├── agents/
 │   │   └── explore.md           # Haiku で動く読み取り専用の探索サブエージェント
+│   ├── output-styles/
+│   │   └── terse.md             # 定型作業フェーズ用の電報調スタイル(/output-style terse)
 │   └── skills/
 │       └── cost-audit/          # ★ 既存設定を監査・見直すスキル(/cost-audit で起動)
 │           ├── SKILL.md

@@ -21,11 +21,11 @@ if [ -n "$cost" ]; then
   out="$out \$$(printf '%.2f' "$cost")"
 fi
 
-# 10ターン換算ペース(ターン数はユーザーの実プロンプト数)
+# 10ターン換算ペース + 現在のコンテキストサイズ(毎ターンの入力コストを決める指標)
 # 巨大トランスクリプト(5MB超)は描画のたびの解析が重いのでスキップ(表示だけの機能のため)
 if [ -n "$cost" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c < "$transcript")" -le 5000000 ]; then
-  turns=$(jq -s '
-    [ .[]
+  stats=$(jq -rs '
+    ([ .[]
       | select(.type == "user")
       | select(.isMeta != true)
       | select(.toolUseResult == null)
@@ -34,8 +34,15 @@ if [ -n "$cost" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c 
         elif type == "array" then
           (if any(.[]?; (.type? // "") == "tool_result") then empty else 1 end)
         else empty end
-    ] | length
-  ' "$transcript" 2>/dev/null) || turns=0
+    ] | length) as $turns
+    | ([ .[] | select(.message.usage != null) ]
+       | if length == 0 then 0
+         else (last | .message.usage
+               | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))
+         end) as $ctx
+    | "\($turns) \($ctx)"
+  ' "$transcript" 2>/dev/null) || stats=""
+  read -r turns ctx <<< "${stats:-0 0}"
   if [ "${turns:-0}" -ge 1 ]; then
     pace10=$(awk -v c="$cost" -v t="$turns" 'BEGIN{printf "%.2f", c / t * 10}')
     target10=$(awk -v b="${CLAUDE_TURN_BUDGET_USD:-0.10}" 'BEGIN{printf "%.2f", b * 10}')
@@ -44,6 +51,10 @@ if [ -n "$cost" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c 
       mark="⚠"
     fi
     out="$out T:${turns} 10T≈\$${pace10}${mark}"
+  fi
+  if [ "${ctx:-0}" -ge 1000 ]; then
+    ctxk=$(awk -v x="$ctx" 'BEGIN{printf "%.0f", x / 1000}')
+    out="$out ctx:${ctxk}k"
   fi
 fi
 

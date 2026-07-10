@@ -11,7 +11,7 @@ command -v jq >/dev/null 2>&1 || exit 0
 cmd=$(printf '%s' "$input" | jq -r '.tool_input.command // empty')
 [ -z "$cmd" ] && exit 0
 
-heavy='(package-lock\.json|yarn\.lock|pnpm-lock\.yaml|Cargo\.lock|poetry\.lock|uv\.lock|go\.sum|node_modules/|/dist/|/build/|\.min\.(js|css)|\.map)'
+heavy='(package-lock\.json|pnpm-lock\.yaml|[^ /]*\.lock|go\.sum|node_modules/|\.venv/|__pycache__/|\.terraform/|/dist/|/build/|\.min\.(js|css)|\.map)'
 reader='^[[:space:]]*(cat|head|tail|less|more|bat)[[:space:]]'
 
 if printf '%s' "$cmd" | grep -Eq "$reader" && printf '%s' "$cmd" | grep -Eq "$heavy"; then

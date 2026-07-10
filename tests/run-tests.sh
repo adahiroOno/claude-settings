@@ -64,20 +64,20 @@ TR="$SB/inc.jsonl"; SID=tst-i1
 { user_line 1; usage_line 1 claude-sonnet-5 10000 0 0 14000; user_line 2; usage_line 2 claude-sonnet-5 10000 0 0 14000; } > "$TR"
 guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1
 st=$(cat "${TMPDIR:-/tmp}/claude-budget-state-$SID" 2>/dev/null || echo "")
-case "$st" in *" 480000.0000 2") ok "累計が検算値と一致 (raw=480000, turns=2)";; *) ng "累計不一致: [$st]";; esac
+case "$st" in *" 480000.0000 2 10000") ok "累計が検算値と一致 (raw=480000, turns=2, ctx=10000)";; *) ng "累計不一致: [$st]";; esac
 printf '{"uuid":"u3","type":"user","message":{"role":"user","content":"p3' >> "$TR"   # 書きかけ行
 guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1
 st2=$(cat "${TMPDIR:-/tmp}/claude-budget-state-$SID" 2>/dev/null || echo "")
-case "$st2" in *" 2") ok "書きかけ行は繰り越し(turns=2 のまま)";; *) ng "書きかけ行を誤処理: [$st2]";; esac
+case "$st2" in *" 480000.0000 2 10000") ok "書きかけ行は繰り越し(turns=2 のまま)";; *) ng "書きかけ行を誤処理: [$st2]";; esac
 printf '"}}\n' >> "$TR"; { user_line 4; usage_line 4 claude-sonnet-5 10000 0 0 14000; usage_line 5 claude-haiku-4-5 30000 0 0 2000; } >> "$TR"
 guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1
 st3=$(cat "${TMPDIR:-/tmp}/claude-budget-state-$SID" 2>/dev/null || echo "")
 # 期待: raw = 480000 + 240000(sonnet) + 30000*1+2000*5=40000(haiku) = 760000, turns=4
-case "$st3" in *" 760000.0000 4") ok "完結後の差分+haiku単価を正しく累計";; *) ng "差分累計不一致: [$st3]";; esac
+case "$st3" in *" 760000.0000 4 30000") ok "完結後の差分+haiku単価を正しく累計(ctx更新含む)";; *) ng "差分累計不一致: [$st3]";; esac
 user_line 9 > "$TR"   # ファイル縮小 → リセット
 guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1
 st4=$(cat "${TMPDIR:-/tmp}/claude-budget-state-$SID" 2>/dev/null || echo "")
-case "$st4" in *" 0.0000 1") ok "ファイル縮小でフル再計算";; *) ng "縮小時の再計算失敗: [$st4]";; esac
+case "$st4" in *" 0.0000 1 0") ok "ファイル縮小でフル再計算";; *) ng "縮小時の再計算失敗: [$st4]";; esac
 
 echo "== 5. ペースガード =="
 TR="$SB/pace.jsonl"; SID=tst-p1
@@ -189,6 +189,21 @@ case "$out" in *更新されています*) ng "初回でフィンガープリン
 sleep 1.1; echo "# changed" >> "$BIND/claude"
 out=$(printf '{"cwd":"%s"}' "$WV" | PATH="$BIND:$PATH" CLAUDE_CONFIG_DIR="$CFG" bash "$NOTICE")
 case "$out" in *更新されています*) ok "本体更新を検知して再監査を促す";; *) ng "本体更新を検知できない: [$out]";; esac
+
+echo "== 14. コンテキスト肥大ガード =="
+TR="$SB/ctx.jsonl"; SID=tst-c1
+{ user_line 1; usage_line 1 claude-sonnet-5 2000 0 200000 1000; } > "$TR"   # ctx=202k > 120k
+guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1
+assert_exit "ctx 閾値超過で介入(初回)" 2 $?
+guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1
+assert_exit "同セッション2回目は素通し(ctx)" 0 $?
+rm -f "${TMPDIR:-/tmp}/claude-budget-ctx-$SID" "${TMPDIR:-/tmp}/claude-budget-state-$SID"
+msg=$(guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" 2>&1 >/dev/null || true)
+case "$msg" in *explore*handoff.md*) ok "介入メッセージに explore 委譲と handoff 手順を含む";; *) ng "介入メッセージ不備: [$msg]";; esac
+TR2="$SB/ctx-ok.jsonl"
+{ user_line 1; usage_line 1 claude-sonnet-5 2000 0 50000 1000; } > "$TR2"   # ctx=52k < 120k
+guard_in PreToolUse tst-c2 Read x "$TR2" | bash "$GUARD" >/dev/null 2>&1
+assert_exit "閾値未満は無干渉(ctx)" 0 $?
 
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"

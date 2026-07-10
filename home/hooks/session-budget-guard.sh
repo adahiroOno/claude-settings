@@ -70,17 +70,18 @@ fi
 size=$(wc -c < "$transcript") || exit 0
 state="${TMPDIR:-/tmp}/claude-budget-state-${session}"
 
-prev_off=0; prev_raw=0; prev_turns=0
+prev_off=0; prev_raw=0; prev_turns=0; prev_ctx=0
 if [ -f "$state" ]; then
-  read -r prev_off prev_raw prev_turns < "$state" 2>/dev/null || true
+  read -r prev_off prev_raw prev_turns prev_ctx < "$state" 2>/dev/null || true
   if ! [[ "$prev_off" =~ ^[0-9]+$ && "$prev_raw" =~ ^[0-9]+(\.[0-9]+)?$ && "$prev_turns" =~ ^[0-9]+$ ]] \
      || [ "$prev_off" -gt "$size" ]; then
-    prev_off=0; prev_raw=0; prev_turns=0
+    prev_off=0; prev_raw=0; prev_turns=0; prev_ctx=0
     rm -f "$state"   # 壊れた/別ファイルの状態を残さない
   fi
+  [[ "${prev_ctx:-}" =~ ^[0-9]+$ ]] || prev_ctx=0
 fi
 
-raw="$prev_raw"; turns="$prev_turns"
+raw="$prev_raw"; turns="$prev_turns"; ctx="$prev_ctx"
 if [ "$size" -gt "$prev_off" ]; then
   delta=$(mktemp "${TMPDIR:-/tmp}/claude-budget-delta.XXXXXX")
   trap 'rm -f "$delta"' EXIT
@@ -117,15 +118,21 @@ if [ "$size" -gt "$prev_off" ]; then
               (if any(.[]?; (.type? // "") == "tool_result") then empty else 1 end)
             else empty end
         ] | length) as $t
-      | "\($raw) \($t)"
+      | ([ $L[] | select(.message.usage != null) ]
+         | if length == 0 then -1
+           else (last | .message.usage
+                 | (.input_tokens // 0) + (.cache_creation_input_tokens // 0) + (.cache_read_input_tokens // 0))
+           end) as $ctx
+      | "\($raw) \($t) \($ctx)"
     ' "$delta.done" 2>/dev/null) || out=""
     rm -f "$delta.done"
     if [ -n "$out" ]; then
-      d_raw=${out% *}; d_turns=${out##* }
+      d_raw=${out%% *}; rest=${out#* }; d_turns=${rest%% *}; d_ctx=${rest##* }
       if [[ "$d_turns" =~ ^[0-9]+$ ]]; then
         raw=$(awk -v a="$prev_raw" -v b="$d_raw" 'BEGIN{printf "%.4f", a + b}')
         turns=$((prev_turns + d_turns))
-        printf '%s %s %s\n' "$((prev_off + proc))" "$raw" "$turns" > "$state"
+        if [[ "$d_ctx" =~ ^[0-9]+$ ]]; then ctx="$d_ctx"; fi   # チャンクに usage が無ければ前回値を維持
+        printf '%s %s %s %s\n' "$((prev_off + proc))" "$raw" "$turns" "$ctx" > "$state"
       fi
     fi
   fi
@@ -217,6 +224,32 @@ if [ "$event" = "PreToolUse" ] && [ "${turns:-0}" -ge 3 ]; then
       } >&2
       exit 2
     fi
+  fi
+fi
+# -----------------------------------------------------------------------------
+
+# ---- コンテキスト肥大ガード ---------------------------------------------------
+# ユーザーが /clear を意識しなくても、膨張の早期段階で自動介入する。
+# ctx(直近リクエストの入力サイズ)が閾値を超えたら、セッション1回だけブロックして
+# 「以後の読み込み禁止・explore 委譲・handoff 更新・/clear 提案」を指示する。
+# (/clear 自体は Claude Code の仕様上ユーザー操作が必要 — ここまで準備すれば
+#  ユーザーの仕事は提案に1回応じるだけになる)
+CTXLIM="${CLAUDE_CTX_LIMIT_TOKENS:-120000}"
+if [ "$event" = "PreToolUse" ] && [ "${ctx:-0}" -gt "$CTXLIM" ]; then
+  cmarker="${TMPDIR:-/tmp}/claude-budget-ctx-${session}"
+  if [ ! -f "$cmarker" ]; then
+    touch "$cmarker"
+    ctxk=$(awk -v x="$ctx" 'BEGIN{printf "%.0f", x / 1000}')
+    limk=$(awk -v x="$CTXLIM" 'BEGIN{printf "%.0f", x / 1000}')
+    {
+      echo "コンテキスト肥大警告: 現在 約${ctxk}k トークン(閾値 ${limk}k)。この文脈は毎リクエスト再送され続けます。"
+      echo "これ以降は次を厳守してください:"
+      echo " - 新たなファイル・ログ・Web結果をメイン文脈に読み込まない。読取・調査が必要なら explore サブエージェントに委譲し、結論だけ受け取る"
+      echo " - いま扱っているタスクの区切りで .claude/handoff.md を更新し、ユーザーに次を提案する:"
+      echo "   「コンテキストが肥大しているため /clear を推奨します。引き継ぎメモは保存済みで、新しいセッションが自動検知して続きから再開できます」"
+      echo "この警告はセッション1回のみです。同じツール呼び出しを再実行して作業を続行してください。"
+    } >&2
+    exit 2
   fi
 fi
 # -----------------------------------------------------------------------------

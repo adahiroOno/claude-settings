@@ -40,7 +40,7 @@ printf '{"hook_event_name":"PreToolUse","transcript_path":"%s","session_id":"%s"
   | bash "$GUARD" >/dev/null 2>&1
 st=$(cat "${TMPDIR:-/tmp}/claude-budget-state-$SID" 2>/dev/null || echo "")
 case "$st" in
-  *" 240000.0000 1") echo "ok: コスト集計(既知データと一致)";;
+  *" 240000.0000 1 10000") echo "ok: コスト集計(既知データと一致)";;
   *) echo "NG: コスト集計が不一致 [$st] — ガードロジックのドリフトの可能性"; fail=1;;
 esac
 

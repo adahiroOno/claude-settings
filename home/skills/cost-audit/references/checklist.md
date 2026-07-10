@@ -120,7 +120,7 @@
 - 修正: `statusline.sh` 導入。チーム運用なら `CLAUDE_CODE_ENABLE_TELEMETRY=1` + OTLP エクスポート(docs/cost-optimization.md §6)。
 
 ### E-1b. セッション予算ガードの不在・閾値の形骸化 [High]
-- 確認: hooks に `session-budget-guard.sh`(PreToolUse `*` + UserPromptSubmit)が配線されているか。env の `CLAUDE_SESSION_BUDGET_USD` が実態に合っているか(平均セッションコストの2〜3倍が目安。高すぎると発火せず形骸化、低すぎると日常作業が中断される)。`CLAUDE_TURN_BUDGET_USD`(目標ペース、既定 $0.10/ターン = 10ターン≒$1)も直近の実績ペース(statusline の `10T≈` 表示)と照合して較正する。
+- 確認: hooks に `session-budget-guard.sh`(PreToolUse `*` + UserPromptSubmit)が配線されているか。env の `CLAUDE_SESSION_BUDGET_USD` が実態に合っているか(平均セッションコストの2〜3倍が目安。高すぎると発火せず形骸化、低すぎると日常作業が中断される)。`CLAUDE_TURN_BUDGET_USD`(目標ペース、既定 $0.10/ターン = 10ターン≒$1)も直近の実績ペース(statusline の `10T≈` 表示)と照合して較正する。`CLAUDE_CTX_LIMIT_TOKENS`(コンテキスト肥大の介入閾値、既定 12万)は statusline の `ctx:` 表示の典型値の2倍程度が目安。
 - 問題: ガードがないと「気づいたら高額セッション」を止める手段がモデルの自制しかない。
 - 修正: フックを配線し、直近の `/cost` 実績から閾値を較正する。
 

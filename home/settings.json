@@ -4,7 +4,9 @@
   "alwaysThinkingEnabled": false,
   "env": {
     "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
-    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"
+    "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
+    "CLAUDE_SESSION_BUDGET_USD": "5",
+    "CLAUDE_SESSION_BUDGET_WARN_USD": "2.5"
   },
   "permissions": {
     "deny": [
@@ -51,6 +53,25 @@
           {
             "type": "command",
             "command": "~/.claude/hooks/guard-heavy-read.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-budget-guard.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/session-budget-guard.sh"
           }
         ]
       }

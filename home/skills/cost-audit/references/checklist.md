@@ -109,6 +109,11 @@
 - 確認: `statusLine` 設定、OTEL テレメトリ
 - 修正: `statusline.sh` 導入。チーム運用なら `CLAUDE_CODE_ENABLE_TELEMETRY=1` + OTLP エクスポート(docs/cost-optimization.md §6)。
 
+### E-1b. セッション予算ガードの不在・閾値の形骸化 [High]
+- 確認: hooks に `session-budget-guard.sh`(PreToolUse `*` + UserPromptSubmit)が配線されているか。env の `CLAUDE_SESSION_BUDGET_USD` が実態に合っているか(平均セッションコストの2〜3倍が目安。高すぎると発火せず形骸化、低すぎると日常作業が中断される)。
+- 問題: ガードがないと「気づいたら高額セッション」を止める手段がモデルの自制しかない。
+- 修正: フックを配線し、直近の `/cost` 実績から閾値を較正する。
+
 ### E-2. 設定の二重定義 [Medium]
 - 確認: 同じ変数が シェル環境 / settings.json(user, project, local) / managed に重複していないか
 - 問題: 優先順位(managed > CLI > local > project > user)を誤解し、「設定したのに効かない」→ 誤った方向のチューニングへ。

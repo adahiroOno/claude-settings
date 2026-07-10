@@ -72,16 +72,32 @@ if [ "$over_hard" = "1" ]; then
     {
       echo "🛑 セッション予算超過: 推定 \$${cost_fmt} / 上限 \$${HARD}"
       echo "   このセッションでの続行はブロックされています。/clear で新しいセッションを開始してください。"
+      echo "   引き継ぎメモが .claude/handoff.md に保存されていれば、新セッションが自動で検知し再開できます。"
       echo "   上限の変更: settings.json の env CLAUDE_SESSION_BUDGET_USD"
     } >&2
-  else
-    # Claude 向けメッセージ(作業を要約して終了させる)
-    {
-      echo "セッション予算超過(推定 \$${cost_fmt} / 上限 \$${HARD})。これ以降のツール実行はすべてブロックされます。"
-      echo "新たな作業を開始せず、ここまでの結果と未完了事項を簡潔に要約してターンを終了してください。"
-      echo "続きは新しいセッションで行うようユーザーに案内してください。"
-    } >&2
+    exit 2
   fi
+
+  # グレースレーン: 上限超過中でも「引き継ぎメモの保存」だけは許可する。
+  # これがないと状態を書き残す手段ごとブロックされ、作業が失われる。
+  tool=$(printf '%s' "$input" | jq -r '.tool_name // empty')
+  fpath=$(printf '%s' "$input" | jq -r '.tool_input.file_path // empty')
+  case "$tool" in
+    Write|Edit)
+      case "$fpath" in
+        */.claude/handoff.md|.claude/handoff.md) exit 0 ;;
+      esac
+      ;;
+  esac
+
+  # Claude 向けメッセージ(引き継ぎメモを書かせてから終了させる)
+  {
+    echo "セッション予算超過(推定 \$${cost_fmt} / 上限 \$${HARD})。これ以降のツール実行はブロックされます。"
+    echo "ただし例外として .claude/handoff.md への Write/Edit だけは許可されています。次の順で終了処理をしてください:"
+    echo " 1. .claude/handoff.md に引き継ぎメモを書く(40行以内): 目的 / 完了済み / 未完了と次の一手 / 重要な決定・注意点"
+    echo " 2. ここまでの結果を簡潔に要約する"
+    echo " 3. 「/clear 後の新セッションで handoff.md から再開できる」ことをユーザーに案内する"
+  } >&2
   exit 2
 fi
 
@@ -138,6 +154,7 @@ if [ "$over_warn" = "1" ] && [ "$event" = "PreToolUse" ]; then
       echo " - 残作業を洗い出し、今のセッションで終えるべき最小範囲に絞る"
       echo " - 探索・調査は explore サブエージェントに委譲する"
       echo " - 不要になった文脈が多いなら、ユーザーに /compact または /clear を提案する"
+      echo " - 上限(\$${HARD})に達すると強制終了されるため、作業の区切りで .claude/handoff.md に未完了事項を書き残しておく"
       echo "この警告は一度だけです。同じツール呼び出しを再実行して続行してください。"
     } >&2
     exit 2

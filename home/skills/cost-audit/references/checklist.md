@@ -119,6 +119,11 @@
 - 問題: 優先順位(managed > CLI > local > project > user)を誤解し、「設定したのに効かない」→ 誤った方向のチューニングへ。
 - 修正: 定義箇所を一本化(推奨: ユーザー共通は `~/.claude/settings.json`、プロジェクト固有は `.claude/settings.json`)。
 
+### E-2b. 常駐メモリによる再開運用 [Medium]
+- 確認: CLAUDE.md やメモリファイルに「前回作業の続き」系の内容が恒常的に追記されていないか。SessionStart 系フックが大きなコンテキストを毎セッション注入していないか。
+- 問題: 再開用メモの常駐化は毎リクエストの固定費になり、肥大化も進む。
+- 修正: ハンドオフ方式へ移行(`.claude/handoff.md` + `handoff-notice.sh`。docs/cost-optimization.md §6)。CLAUDE.md に溜まった作業メモは削除する。
+
 ### E-3. autocompact を無効化している [Medium]
 - 問題: コンテキスト溢れ間際の劣化・やり直しの方が高くつく。
 - 修正: 有効のまま。長いタスクの区切りで手動 `/compact` も可。

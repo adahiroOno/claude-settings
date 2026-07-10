@@ -22,7 +22,8 @@ if [ -n "$cost" ]; then
 fi
 
 # 10ターン換算ペース(ターン数はユーザーの実プロンプト数)
-if [ -n "$cost" ] && [ -n "$transcript" ] && [ -f "$transcript" ]; then
+# 巨大トランスクリプト(5MB超)は描画のたびの解析が重いのでスキップ(表示だけの機能のため)
+if [ -n "$cost" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c < "$transcript")" -le 5000000 ]; then
   turns=$(jq -s '
     [ .[]
       | select(.type == "user")

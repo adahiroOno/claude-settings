@@ -76,6 +76,16 @@
           }
         ]
       }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/handoff-notice.sh"
+          }
+        ]
+      }
     ]
   },
   "statusLine": {

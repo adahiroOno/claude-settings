@@ -27,7 +27,8 @@ claude-settings/
 │   ├── statusline.sh            # モデル名とセッションコストを常時表示
 │   ├── hooks/
 │   │   ├── guard-heavy-read.sh       # Bash経由の巨大ファイル全文読みをブロック
-│   │   └── session-budget-guard.sh   # セッション予算のサーキットブレーカー
+│   │   ├── session-budget-guard.sh   # 予算・ペースのサーキットブレーカー
+│   │   └── handoff-notice.sh         # /clear後の作業再開(ハンドオフ検知・低コスト)
 │   ├── agents/
 │   │   └── explore.md           # Haiku で動く読み取り専用の探索サブエージェント
 │   └── skills/
@@ -75,5 +76,7 @@ bash scripts/install.sh
 
 ## 運用のリズム
 
-- **毎セッション**: ステータスラインでコストを目視。タスクが変わったら `/clear`
+- **毎セッション**: ステータスラインでコストとペース(`10T≈$X`)を目視。タスクが変わったら `/clear`(未完了があれば `.claude/handoff.md` に書き残してから — 新セッションが自動検知して再開できる)
 - **週次**: `/cost-audit` で設定ドリフトを検査(CLAUDE.md の肥大化、MCP サーバーの増殖は自然に起きる)
+
+※ `.claude/handoff.md` は一時ファイルのため、各プロジェクトの `.gitignore` に追加を推奨。

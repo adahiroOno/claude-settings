@@ -1,7 +1,10 @@
 #!/usr/bin/env bash
-# ステータスライン: モデル / セッションコスト / 10ターン換算ペース / 変更行数 を常時表示。
-# 10ターン換算ペースは「10ターン ≒ $1」目標との乖離を一目で見るための指標。
-# Claude Code から JSON が stdin で渡される。jq が無い環境ではモデル名のみ表示。
+# ステータスライン: モデル / セッションコスト / 10ターン換算ペース / コンテキストサイズ / 変更行数。
+# - 10ターン換算ペース: 「10ターン ≒ $1」目標との乖離を一目で見る指標
+# - ctx: 現在のコンテキストサイズ(毎ターンの入力コストを決める。/clear 判断の材料)
+# 描画のたびに呼ばれるため軽量性を優先:
+# - ターン数は予算ガードが維持する状態ファイルから読む(なければ小さいファイルのみ自力計算)
+# - ctx はトランスクリプト末尾100行だけから算出
 set -u
 input=$(cat)
 
@@ -15,35 +18,37 @@ cost=$(printf '%s' "$input" | jq -r '.cost.total_cost_usd // empty')
 added=$(printf '%s' "$input" | jq -r '.cost.total_lines_added // empty')
 removed=$(printf '%s' "$input" | jq -r '.cost.total_lines_removed // empty')
 transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
+session=$(printf '%s' "$input" | jq -r '.session_id // empty')
 
 out="[$model]"
 if [ -n "$cost" ]; then
   out="$out \$$(printf '%.2f' "$cost")"
 fi
 
-# 10ターン換算ペース + 現在のコンテキストサイズ(毎ターンの入力コストを決める指標)
-# 巨大トランスクリプト(5MB超)は描画のたびの解析が重いのでスキップ(表示だけの機能のため)
-if [ -n "$cost" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c < "$transcript")" -le 5000000 ]; then
-  stats=$(jq -rs '
-    ([ .[]
-      | select(.type == "user")
-      | select(.isMeta != true)
-      | select(.toolUseResult == null)
-      | (.message.content // empty)
-      | if type == "string" then 1
-        elif type == "array" then
-          (if any(.[]?; (.type? // "") == "tool_result") then empty else 1 end)
-        else empty end
-    ] | length) as $turns
-    | ([ .[] | select(.message.usage != null) ]
-       | if length == 0 then 0
-         else (last | .message.usage
-               | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))
-         end) as $ctx
-    | "\($turns) \($ctx)"
-  ' "$transcript" 2>/dev/null) || stats=""
-  read -r turns ctx <<< "${stats:-0 0}"
-  if [ "${turns:-0}" -ge 1 ]; then
+if [ -n "$transcript" ] && [ -f "$transcript" ]; then
+  # ターン数: 予算ガードの状態ファイル(offset raw turns)を優先
+  turns=""
+  state="${TMPDIR:-/tmp}/claude-budget-state-${session}"
+  if [ -n "$session" ] && [ -f "$state" ]; then
+    turns=$(awk '{print $3}' "$state" 2>/dev/null || true)
+    [[ "${turns:-}" =~ ^[0-9]+$ ]] || turns=""
+  fi
+  if [ -z "$turns" ] && [ "$(wc -c < "$transcript")" -le 2000000 ]; then
+    turns=$(jq -Rn '
+      [inputs | fromjson? // empty
+        | select(.type == "user")
+        | select(.isMeta != true)
+        | select(.toolUseResult == null)
+        | (.message.content // empty)
+        | if type == "string" then 1
+          elif type == "array" then
+            (if any(.[]?; (.type? // "") == "tool_result") then empty else 1 end)
+          else empty end
+      ] | length
+    ' "$transcript" 2>/dev/null) || turns=""
+  fi
+
+  if [ -n "$cost" ] && [[ "${turns:-}" =~ ^[0-9]+$ ]] && [ "$turns" -ge 1 ]; then
     pace10=$(awk -v c="$cost" -v t="$turns" 'BEGIN{printf "%.2f", c / t * 10}')
     target10=$(awk -v b="${CLAUDE_TURN_BUDGET_USD:-0.10}" 'BEGIN{printf "%.2f", b * 10}')
     mark="✓"
@@ -52,7 +57,16 @@ if [ -n "$cost" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c 
     fi
     out="$out T:${turns} 10T≈\$${pace10}${mark}"
   fi
-  if [ "${ctx:-0}" -ge 1000 ]; then
+
+  # ctx: 直近の assistant usage から現在のコンテキストサイズを推定(末尾100行のみ解析)
+  ctx=$(tail -n 100 "$transcript" 2>/dev/null | jq -Rn '
+    [inputs | fromjson? // empty | select(.message.usage != null)]
+    | if length == 0 then 0
+      else (last | .message.usage
+            | (.input_tokens // 0) + (.cache_read_input_tokens // 0) + (.cache_creation_input_tokens // 0))
+      end
+  ' 2>/dev/null) || ctx=0
+  if [[ "${ctx:-0}" =~ ^[0-9]+$ ]] && [ "$ctx" -ge 1000 ]; then
     ctxk=$(awk -v x="$ctx" 'BEGIN{printf "%.0f", x / 1000}')
     out="$out ctx:${ctxk}k"
   fi

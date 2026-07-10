@@ -39,28 +39,82 @@ if [ -z "$WARN" ]; then
   WARN=$(awk -v h="$HARD" 'BEGIN{printf "%.4f", h * 0.5}')
 fi
 
-# トランスクリプトの usage を集計して推定コスト(USD)を出す。
-# 同一メッセージが複数行に分かれて記録される場合があるため message.id で重複排除。
+# トランスクリプトの usage を集計して推定コスト(USD)とターン数を出す。
+# 【差分解析】毎回全体を再解析すると長時間セッション(数MB)でツール呼び出し毎に
+# 遅延が蓄積するため、処理済みバイト位置と累計を状態ファイルに保持し、
+# 前回以降に追記された部分だけを解析する(O(増分))。
+#   - 書きかけの行(末尾が改行でない)は次回に回す
+#   - 状態が壊れている/ファイルが縮んだ(別セッション等)場合は最初から再計算
+#   - 重複排除(message.id)はチャンク内のみ。同一メッセージのusage行が
+#     チャンク境界をまたいで重複記録されるケースは実運用上ほぼ無い
 # 単価は代表値(/1M tokens): opus 5/25, haiku 1/5, その他(sonnet等) 3/15。
 # キャッシュ書込は入力の1.25倍、キャッシュ読出は0.1倍。
-cost=$(jq -s '
-  def price(m):
-    if   ((m // "") | test("opus"))  then {i: 5, o: 25}
-    elif ((m // "") | test("haiku")) then {i: 1, o: 5}
-    else {i: 3, o: 15} end;
-  [ .[]
-    | select(.message.usage != null)
-  ]
-  | unique_by(.message.id // .uuid)
-  | [ .[]
-      | price(.message.model) as $p
-      | (.message.usage.input_tokens // 0)                  * $p.i
-      + (.message.usage.cache_creation_input_tokens // 0)   * $p.i * 1.25
-      + (.message.usage.cache_read_input_tokens // 0)       * $p.i * 0.1
-      + (.message.usage.output_tokens // 0)                 * $p.o
-    ]
-  | (add // 0) / 1000000
-' "$transcript" 2>/dev/null) || exit 0
+size=$(wc -c < "$transcript") || exit 0
+state="${TMPDIR:-/tmp}/claude-budget-state-${session}"
+
+prev_off=0; prev_raw=0; prev_turns=0
+if [ -f "$state" ]; then
+  read -r prev_off prev_raw prev_turns < "$state" 2>/dev/null || true
+  if ! [[ "$prev_off" =~ ^[0-9]+$ && "$prev_raw" =~ ^[0-9]+(\.[0-9]+)?$ && "$prev_turns" =~ ^[0-9]+$ ]] \
+     || [ "$prev_off" -gt "$size" ]; then
+    prev_off=0; prev_raw=0; prev_turns=0
+  fi
+fi
+
+raw="$prev_raw"; turns="$prev_turns"
+if [ "$size" -gt "$prev_off" ]; then
+  delta=$(mktemp "${TMPDIR:-/tmp}/claude-budget-delta.XXXXXX")
+  trap 'rm -f "$delta"' EXIT
+  tail -c +"$((prev_off + 1))" "$transcript" > "$delta"
+  proc=$(wc -c < "$delta")
+  # 末尾が改行でなければ書きかけの行を除外(次回のフックで処理される)
+  if [ -n "$(tail -c 1 "$delta")" ]; then
+    partial=$(tail -n 1 "$delta" | wc -c)
+    proc=$((proc - partial))
+  fi
+  if [ "$proc" -gt 0 ]; then
+    head -c "$proc" "$delta" > "$delta.done"
+    out=$(jq -Rrn '
+      def price(m):
+        if   ((m // "") | test("opus"))  then {i: 5, o: 25}
+        elif ((m // "") | test("haiku")) then {i: 1, o: 5}
+        else {i: 3, o: 15} end;
+      [inputs | fromjson? // empty] as $L
+      | ([ $L[] | select(.message.usage != null) ]
+         | unique_by(.message.id // .uuid)
+         | map( price(.message.model) as $p
+              | (.message.usage.input_tokens // 0)                * $p.i
+              + (.message.usage.cache_creation_input_tokens // 0) * $p.i * 1.25
+              + (.message.usage.cache_read_input_tokens // 0)     * $p.i * 0.1
+              + (.message.usage.output_tokens // 0)               * $p.o )
+         | add // 0) as $raw
+      | ([ $L[]
+          | select(.type == "user")
+          | select(.isMeta != true)
+          | select(.toolUseResult == null)
+          | (.message.content // empty)
+          | if type == "string" then 1
+            elif type == "array" then
+              (if any(.[]?; (.type? // "") == "tool_result") then empty else 1 end)
+            else empty end
+        ] | length) as $t
+      | "\($raw) \($t)"
+    ' "$delta.done" 2>/dev/null) || out=""
+    rm -f "$delta.done"
+    if [ -n "$out" ]; then
+      d_raw=${out% *}; d_turns=${out##* }
+      if [[ "$d_turns" =~ ^[0-9]+$ ]]; then
+        raw=$(awk -v a="$prev_raw" -v b="$d_raw" 'BEGIN{printf "%.4f", a + b}')
+        turns=$((prev_turns + d_turns))
+        printf '%s %s %s\n' "$((prev_off + proc))" "$raw" "$turns" > "$state"
+      fi
+    fi
+  fi
+  rm -f "$delta"
+  trap - EXIT
+fi
+
+cost=$(awk -v r="$raw" 'BEGIN{printf "%.6f", r / 1000000}')
 
 over_hard=$(awk -v c="$cost" -v h="$HARD" 'BEGIN{print (c >= h) ? 1 : 0}')
 over_warn=$(awk -v c="$cost" -v w="$WARN" 'BEGIN{print (c >= w) ? 1 : 0}')
@@ -102,20 +156,8 @@ if [ "$over_hard" = "1" ]; then
 fi
 
 # ---- ペースガード(10ターン ≒ $1 目標) --------------------------------------
-# ユーザーの実プロンプト数をターン数として数える(ツール結果・メタ行は除外)
+# ターン数(=ユーザーの実プロンプト数。ツール結果・メタ行は除外)は上の差分解析で累計済み。
 TURNB="${CLAUDE_TURN_BUDGET_USD:-0.10}"
-turns=$(jq -s '
-  [ .[]
-    | select(.type == "user")
-    | select(.isMeta != true)
-    | select(.toolUseResult == null)
-    | (.message.content // empty)
-    | if type == "string" then 1
-      elif type == "array" then
-        (if any(.[]?; (.type? // "") == "tool_result") then empty else 1 end)
-      else empty end
-  ] | length
-' "$transcript" 2>/dev/null) || turns=0
 
 # 立ち上がりのノイズを避けるため3ターン目から判定。許容額 = (ターン数+1) × ペース
 if [ "$event" = "PreToolUse" ] && [ "${turns:-0}" -ge 3 ]; then

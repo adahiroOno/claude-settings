@@ -40,7 +40,8 @@ claude-settings/
 │           └── scripts/estimate_tokens.sh
 ├── project-template/            # 各プロジェクトの .claude/ に置くテンプレート
 │   ├── settings.json
-│   └── CLAUDE.md
+│   ├── CLAUDE.md
+│   └── .gitignore               # handoff.md 等の一時ファイルを除外
 ├── docs/
 │   └── cost-optimization.md     # なぜ効くのか(価格構造・キャッシュ経済・アンチパターン)
 └── scripts/
@@ -81,4 +82,4 @@ bash scripts/install.sh
 - **毎セッション**: ステータスラインでコストとペース(`10T≈$X`)を目視。タスクが変わったら `/clear`(未完了があれば `.claude/handoff.md` に書き残してから — 新セッションが自動検知して再開できる)
 - **週次**: `/cost-audit` で設定ドリフトを検査(CLAUDE.md の肥大化、MCP サーバーの増殖は自然に起きる)
 
-※ `.claude/handoff.md` は一時ファイルのため、各プロジェクトの `.gitignore` に追加を推奨。
+※ `.claude/handoff.md` などの一時ファイルは、project-template 同梱の `.gitignore` が除外します。

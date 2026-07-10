@@ -1,0 +1,3 @@
+# .claude/ ディレクトリ内の一時ファイル・個人設定はコミットしない
+handoff.md
+settings.local.json

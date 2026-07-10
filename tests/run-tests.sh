@@ -148,6 +148,21 @@ out=$(bash "$SCAN" "$CLEANP" 2>/dev/null)
 case "$out" in *ok-hook.sh*) ng "無害なフックを誤検出";; *) ok "無害なフックは検出しない";; esac
 case "$out" in *"結果:"*) ok "サマリ行を出力";; *) ng "サマリ行なし";; esac
 
+echo "== 12. 監査ドキュメントの整合性 =="
+CHECK="$ROOT/home/skills/cost-audit/references/checklist.md"
+CMAP="$ROOT/home/skills/cost-audit/references/coverage-map.md"
+[ -f "$CMAP" ] && ok "coverage-map.md が存在" || ng "coverage-map.md がない"
+for cat in A B C D E F G; do
+  grep -q "^## $cat\." "$CHECK" && ok "checklist にカテゴリ $cat" || ng "checklist にカテゴリ $cat がない"
+done
+# coverage-map が参照する全チェック項目 ID が checklist に実在するか
+missing=0
+for id in $(grep -oE '[A-G]-[0-9]+b?' "$CMAP" | sort -u); do
+  grep -q "^### $id\." "$CHECK" || { ng "coverage-map の参照先 $id が checklist にない"; missing=1; }
+done
+[ "$missing" -eq 0 ] && ok "coverage-map の全参照先が checklist に実在"
+grep -q 'coverage-map' "$ROOT/home/skills/cost-audit/SKILL.md" && ok "SKILL.md がフェーズ0で coverage-map を参照" || ng "SKILL.md が coverage-map 未参照"
+
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

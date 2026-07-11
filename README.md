@@ -24,7 +24,7 @@ claude-settings/
 ├── home/                        # ~/.claude/ に配置(scripts/install.sh が実施)
 │   ├── settings.json            # グローバル設定(モデル・permissions・hooks)
 │   ├── CLAUDE.md                # グローバルメモリ: トークン倹約の行動規範(意図的に短い)
-│   ├── statusline.sh            # モデル名とセッションコストを常時表示
+│   ├── statusline.sh            # モデル/コスト/ペース/ctx+キャッシュ率/ターン/スタイルを色分け表示
 │   ├── hooks/
 │   │   ├── guard-heavy-read.sh       # Bash経由の巨大ファイル全文読みをブロック
 │   │   ├── session-budget-guard.sh   # 予算・ペースのサーキットブレーカー
@@ -62,10 +62,29 @@ bash scripts/install.sh
 ```
 
 1. `install.sh` が `home/` の内容を `~/.claude/` に導入します(既存ファイルは `~/.claude/backup-<日時>/` に退避)。
-2. 既存の `settings.json` がある場合は**保持マージ**します — あなたの環境固有の設定(`env` の各種変数、認証まわり、permissions 等)はそのまま残し、本テンプレートの推奨値を上書き・追加します。
+2. 既存の `settings.json` がある場合は**保持マージ**します — あなたの環境固有の設定(`env` の各種変数、認証まわり、permissions、hooks)はそのまま残し、本テンプレートの推奨値を上書き・追加します。
 3. Claude Code を起動し、`/cost-audit` を実行して現状の監査レポートを確認します。
 
 各プロジェクトには `project-template/` の内容を `.claude/` にコピーし、プロジェクトに合わせて調整します。
+
+> **シェルについて**: フック・statusline・スクリプトはすべて `#!/usr/bin/env bash` で実行されます。**ログインシェルが zsh でも fish でも影響ありません**(スクリプトは bash で動きます)。bash 4+ 専用機能は使っていないため、macOS 標準の bash 3.2 でも動作します。必要なのは `jq` と `bash` のみです。
+
+## 更新の取り込み(導入済みユーザー向け)
+
+リポジトリの更新を反映するには、`git pull` してから `install.sh` を**再実行**するだけです:
+
+```bash
+cd claude-settings   # クローンしたディレクトリ
+git pull
+bash scripts/install.sh
+```
+
+`install.sh` は冪等(何度実行しても安全)です。再実行時:
+- 更新された `home/` のファイル(フック・スキル・statusline 等)を `~/.claude/` へ反映します。
+- 変更のあった既存ファイルは `~/.claude/backup-<日時>/` に退避してから上書きします。
+- `settings.json` は**保持マージ**され、あなたが加えた設定(env・認証・独自 permissions/hooks)は保たれます。
+
+更新後、Claude Code のセッションを開き直すと(設定はセッション起動時に読み込まれるため)反映されます。`/cost-audit` の自己診断(H-1)で、更新後もコスト保護が正常に機能していることを確認できます。
 
 ## 既存設定の見直し(cost-audit スキル)
 

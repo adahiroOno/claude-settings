@@ -276,6 +276,22 @@ done
 ri=$(jq -r '.statusLine.refreshInterval' "$ROOT/home/settings.json")
 [ "$ri" = "5" ] && ok "statusLine.refreshInterval が設定済み(モデル切替等イベント外の変更に追随)" || ng "refreshInterval 未設定: $ri"
 
+echo "== 17. プロンプト品質(手戻り削減)レバー =="
+REFINE="$ROOT/home/skills/refine/SKILL.md"
+[ -f "$REFINE" ] && ok "refine スキルが存在" || ng "refine スキルがない"
+grep -q '^name: refine$' "$REFINE" && ok "frontmatter name: refine" || ng "frontmatter name 不正"
+grep -q '^description: .*refine' "$REFINE" && ok "description に発火条件(refine)を含む" || ng "description 不備"
+grep -q '完了条件' "$REFINE" && grep -q '要確認' "$REFINE" && ok "仕様テンプレート(完了条件・要確認)を含む" || ng "仕様テンプレート欠落"
+grep -q 'ファイル探索をしない' "$REFINE" && ok "整形段階の探索禁止ルールを含む" || ng "探索禁止ルール欠落"
+grep -q '## 依頼の受け方' "$ROOT/home/CLAUDE.md" && ok "CLAUDE.md に確認ファースト規範(依頼の受け方)" || ng "CLAUDE.md に確認ファースト規範がない"
+grep -q '確認質問を1つだけ' "$ROOT/home/CLAUDE.md" && ok "確認は1問だけの制約を明記(質問攻めの防止)" || ng "確認1問の制約なし"
+grep -q '^### C-7\.' "$CHECK" && ok "checklist に C-7(手戻りループ)" || ng "checklist に C-7 がない"
+grep -q 'C-7' "$CMAP" && ok "coverage-map が C-7 を参照" || ng "coverage-map に C-7 参照がない"
+grep -q '/refine' "$RM" && grep -q '手戻りの削減' "$RM" && ok "README にレバー7(手戻り削減)の記載" || ng "README にレバー7の記載がない"
+# 常駐コストの回帰防止: 規範追加後も CLAUDE.md が肥大化していないこと
+tok=$(bash "$EST" "$ROOT/home/CLAUDE.md" | awk 'NR==2{print $4}')
+[ "$tok" -lt 1000 ] 2>/dev/null && ok "グローバル CLAUDE.md の常駐コストが 1000 トークン未満($tok)" || ng "CLAUDE.md が肥大化: $tok トークン"
+
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

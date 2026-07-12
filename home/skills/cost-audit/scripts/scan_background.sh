@@ -16,7 +16,7 @@ hit() { printf '  ⚠ %s\n' "$1"; }
 none() { printf '  なし\n'; }
 
 section "1. 実行中の claude プロセス"
-procs=$(ps -eo pid,etime,args 2>/dev/null | grep -E '[c]laude(\s|$)' | grep -vE 'scan_background|grep' | cut -c1-160 || true)
+procs=$(ps -eo pid,etime,args 2>/dev/null | grep -E '[c]laude([[:space:]]|$)' | grep -vE 'scan_background|grep' | cut -c1-160 || true)
 if [ -n "$procs" ]; then
   echo "$procs" | while IFS= read -r line; do hit "$line"; done
   echo "  → 見覚えのないもの・長時間(etime)放置されたものは kill する。"

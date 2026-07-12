@@ -122,7 +122,7 @@
 
 ### E-1. コストの可視化がない [Medium]
 - 確認: `statusLine` 設定、OTEL テレメトリ
-- 修正: `statusline.sh` 導入。チーム運用なら `CLAUDE_CODE_ENABLE_TELEMETRY=1` + OTLP エクスポート(docs/cost-optimization.md §6)。
+- 修正: `statusline.sh` 導入。チーム運用なら `CLAUDE_CODE_ENABLE_TELEMETRY=1` + OTLP エクスポート(docs/cost-optimization.md §7)。
 
 ### E-1c. statusLine.refreshInterval の欠落 [Low]
 - 確認: `settings.json` の `statusLine.refreshInterval` が設定されているか(`jq '.statusLine.refreshInterval'`)。

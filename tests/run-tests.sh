@@ -205,7 +205,7 @@ for cat in A B C D E F G H I; do
 done
 # coverage-map が参照する全チェック項目 ID が checklist に実在するか
 missing=0
-for id in $(grep -oE '[A-G]-[0-9]+b?' "$CMAP" | sort -u); do
+for id in $(grep -oE '[A-I]-[0-9]+b?' "$CMAP" | sort -u); do
   grep -q "^### $id\." "$CHECK" || { ng "coverage-map の参照先 $id が checklist にない"; missing=1; }
 done
 [ "$missing" -eq 0 ] && ok "coverage-map の全参照先が checklist に実在"

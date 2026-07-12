@@ -13,6 +13,7 @@
 # トークン情報は公式 context_window.current_usage を使用(自作トランスクリプト解析は不要)。
 # ターン数のみ予算ガードの状態ファイル(なければ軽量なトランスクリプト集計)から取得。
 set -u
+export LC_NUMERIC=C   # 小数点カンマのロケールで printf '%.2f' が壊れるのを防ぐ
 input=$(cat)
 command -v jq >/dev/null 2>&1 || { printf '[claude] jq未導入'; exit 0; }
 

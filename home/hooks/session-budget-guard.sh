@@ -24,6 +24,9 @@
 #   - 進行中の1リクエストは止められない(検知は次のフック発火時点)
 #   - 推定単価は代表値。実際の請求額とは誤差がある
 set -euo pipefail
+# 小数点がカンマになるロケール(de_DE 等)では awk/printf の小数出力・解析が壊れ、
+# 状態ファイルが数値検証に落ちて毎回フル再解析になるため、数値書式をCに固定する。
+export LC_NUMERIC=C
 
 input=$(cat)
 command -v jq >/dev/null 2>&1 || exit 0

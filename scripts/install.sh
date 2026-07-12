@@ -70,6 +70,11 @@ if [ -n "$OLD_JSON" ]; then
         echo "  ⚠ model: \"$old_model\" → \"$new_model\" に変更しました(コスト最適化のため)。"
         echo "    戻す場合は ~/.claude/settings.json の model を編集してください。"
       fi
+      # 旧テンプレートが配布していた廃止 env 変数の残存を通知(保持マージでは消えないため)
+      if jq -e '.env | has("DISABLE_NON_ESSENTIAL_MODEL_CALLS")' "$SETTINGS" >/dev/null 2>&1; then
+        echo "  ⚠ env.DISABLE_NON_ESSENTIAL_MODEL_CALLS は公式ドキュメントから削除された変数です。"
+        echo "    現行の代替は CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1(適用済み)。旧変数は手動で削除して構いません。"
+      fi
     else
       rm -f "$tmp"
       echo "⚠ マージに失敗したためテンプレートをそのまま配置しました。"

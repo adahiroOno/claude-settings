@@ -93,6 +93,14 @@ guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1; assert_ex
 TR2="$SB/pace-ok.jsonl"
 for i in 1 2 3 4 5; do user_line "$i"; usage_line "$i" claude-sonnet-5 5000 0 0 3000; done > "$TR2"   # $0.30 < 0.6
 guard_in PreToolUse tst-p2 Read x "$TR2" | bash "$GUARD" >/dev/null 2>&1; assert_exit "ペース内は無干渉" 0 $?
+# 公式仕様: UserPromptSubmit の exit 2 はプロンプトを消去し stderr はユーザーのみ。
+# ペース・肥大・警告の3段は UserPromptSubmit で発火してはならない(プロンプト誤消去の防止)。
+guard_in UserPromptSubmit tst-p3 "" "" "$TR" | bash "$GUARD" >/dev/null 2>&1
+assert_exit "ペース超過でも UserPromptSubmit は素通し(プロンプトを消去しない)" 0 $?
+TRC="$SB/pace-ctx.jsonl"
+{ user_line 1; usage_line 1 claude-sonnet-5 2000 0 200000 1000; } > "$TRC"   # ctx 202k > 120k
+guard_in UserPromptSubmit tst-p4 "" "" "$TRC" | bash "$GUARD" >/dev/null 2>&1
+assert_exit "ctx 超過でも UserPromptSubmit は素通し(肥大警告は PreToolUse 限定)" 0 $?
 
 echo "== 6. handoff-notice =="
 W="$SB/proj"; mkdir -p "$W/.claude"

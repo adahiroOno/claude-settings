@@ -240,6 +240,24 @@ TR2="$SB/ctx-ok.jsonl"
 guard_in PreToolUse tst-c2 Read x "$TR2" | bash "$GUARD" >/dev/null 2>&1
 assert_exit "閾値未満は無干渉(ctx)" 0 $?
 
+echo "== 15. thinking エクスポート(モデル呼び出しなしの検証) =="
+EXPORT="$ROOT/home/skills/cost-audit/scripts/export_thinking.sh"
+T15="$SB/thinking.jsonl"
+printf '{"uuid":"a1","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"thinking","thinking":"テスト思考内容"},{"type":"text","text":"回答"}]}}\n' > "$T15"
+out=$(bash "$EXPORT" "$T15")
+case "$out" in *"テスト思考内容"*) ok "中身ありのthinkingを抽出";; *) ng "抽出失敗: [$out]";; esac
+case "$out" in *"モデル呼び出しは発生していません"*) ok "コストゼロである旨を明記";; *) ng "コスト説明が欠落";; esac
+T15b="$SB/thinking-empty.jsonl"
+printf '{"uuid":"a1","type":"assistant","timestamp":"2026-01-01T00:00:00Z","message":{"content":[{"type":"thinking","thinking":""}]}}\n' > "$T15b"
+out=$(bash "$EXPORT" "$T15b")
+case "$out" in *"omitted"*"summarized"*) ok "空thinking(omitted)の説明を表示";; *) ng "空thinkingの説明なし: [$out]";; esac
+T15c="$SB/no-thinking.jsonl"
+printf '{"uuid":"a1","type":"assistant","message":{"content":[{"type":"text","text":"回答のみ"}]}}\n' > "$T15c"
+out=$(bash "$EXPORT" "$T15c")
+case "$out" in *"thinking ブロックはありません"*) ok "thinkingなしケースを正しく報告";; *) ng "不正: [$out]";; esac
+bash "$EXPORT" "$T15" "$SB/exported.md" >/dev/null
+[ -f "$SB/exported.md" ] && grep -q "テスト思考内容" "$SB/exported.md" && ok "ファイル出力モードが機能" || ng "ファイル出力失敗"
+
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

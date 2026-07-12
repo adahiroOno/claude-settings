@@ -39,7 +39,8 @@ claude-settings/
 │           ├── references/checklist.md       # A〜G 7カテゴリのチェックリスト
 │           ├── references/coverage-map.md    # 消費面の分類地図(見落とし防止の基盤)
 │           ├── scripts/estimate_tokens.sh    # トークン量見積り
-│           └── scripts/scan_background.sh    # バックグラウンド消費の検出
+│           ├── scripts/scan_background.sh    # バックグラウンド消費の検出
+│           └── scripts/export_thinking.sh    # thinkingの事後アーカイブ(モデル呼び出しなし)
 ├── project-template/            # 各プロジェクトの .claude/ に置くテンプレート
 │   ├── settings.json
 │   ├── CLAUDE.md
@@ -130,6 +131,21 @@ Claude Code が [公式に stdin へ渡す JSON](https://code.claude.com/docs/ja
 | 🎫 トークン内訳 | **`CLAUDE_STATUSLINE_TOKENS=1` のときのみ**。直近リクエストの `in:`新規入力 `rd:`キャッシュ読出 `wr:`キャッシュ書込 `out:`出力 | — |
 
 予算・肥大の閾値は `~/.claude/settings.json` の env(`CLAUDE_SESSION_BUDGET_USD` / `CLAUDE_CTX_LIMIT_TOKENS` / `CLAUDE_TURN_BUDGET_USD`)に連動します。
+
+## thinking(判断根拠)のアーカイブ
+
+thinking は生成された時点で出力トークンとして課金される(display設定に関わらず不可避)。
+そのコストを削減する手段ではなく、**既に発生したコストの記録を、追加コストゼロで残す**ためのツールです:
+
+```bash
+bash home/skills/cost-audit/scripts/export_thinking.sh [transcript.jsonl] [出力先.md]
+```
+
+jq のみで動作しモデル呼び出しは一切ないため、実行自体のコストはゼロです。トランスクリプトの
+`thinking` ブロックを時系列で Markdown に抽出します。ただし `thinking.display` が既定の
+`"omitted"` の場合、API はブロックの中身を空文字列で返すため**抽出しても空になります**
+(生成コストは発生済み)。判断根拠を残したい場合は `"summarized"` に切り替える必要があります —
+これは可視性の設定でありコストは増えません。
 
 ## テストと実タスクシミュレーション
 

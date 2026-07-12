@@ -292,6 +292,12 @@ ri=$(jq -r '.statusLine.refreshInterval' "$ROOT/home/settings.json")
 jq -e '.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE == "1"' "$ROOT/home/settings.json" >/dev/null && ok "env にタイトル生成停止(公式文書化済みの変数)" || ng "CLAUDE_CODE_DISABLE_TERMINAL_TITLE 未設定"
 jq -e '.env | has("DISABLE_NON_ESSENTIAL_MODEL_CALLS") | not' "$ROOT/home/settings.json" >/dev/null && ok "廃止変数 DISABLE_NON_ESSENTIAL_MODEL_CALLS を配布していない" || ng "廃止変数が settings.json に残存"
 grep -q '^maxTurns: [0-9]' "$ROOT/home/agents/explore.md" && ok "explore に maxTurns 上限(サブエージェント暴走の決定論的天井)" || ng "explore に maxTurns がない"
+# README のディレクトリツリーと実ファイルの整合(構成図の欠落・陳腐化の検知)
+tree_miss=0
+while IFS= read -r sf; do
+  grep -q "$(basename "$sf")" "$RM" || { ng "README ツリーに $(basename "$sf") がない"; tree_miss=1; }
+done < <(find "$ROOT/home" -name '*.sh' -o -name 'SKILL.md' -o -name '*.md' -path '*references*')
+[ "$tree_miss" -eq 0 ] && ok "home/ の全スクリプト・スキル資産が README に記載"
 
 echo "== 17. プロンプト品質(手戻り削減)レバー =="
 REFINE="$ROOT/home/skills/refine/SKILL.md"

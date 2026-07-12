@@ -66,6 +66,7 @@ claude-settings/
 │       │   ├── references/coverage-map.md    # 消費面の分類地図(見落とし防止の基盤)
 │       │   ├── scripts/estimate_tokens.sh    # トークン量見積り
 │       │   ├── scripts/scan_background.sh    # バックグラウンド消費の検出
+│       │   ├── scripts/selftest_guard.sh     # ガードのカナリア自己診断(仕様ドリフト検知②)
 │       │   └── scripts/export_thinking.sh    # thinkingの事後アーカイブ(モデル呼び出しなし)
 │       └── refine/
 │           └── SKILL.md         # 曖昧な依頼を実行前に仕様へ整形(/refine で起動・手戻り防止)

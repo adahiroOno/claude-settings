@@ -107,13 +107,21 @@ strip() { sed 's/\x1b\[[0-9;]*m//g'; }   # ANSI色除去
 TR="$SB/sl.jsonl"; SID=tst-s1
 { user_line 1; usage_line 1 claude-sonnet-5 3000 2000 42000 500; } > "$TR"   # ctx=47k, cache=42k/47k=89%
 guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1   # 状態ファイル生成
+# cost 0.08/予算5=1%, ctx=47k/120k=39%, cache=42k/47k=89%, pace 10T=$0.80(目標内)
 out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"transcript_path":"%s","session_id":"%s","output_style":{"name":"terse"}}' "$TR" "$SID" | bash "$STATUS" | strip)
-case "$out" in *"10T:\$0.80✓"*) ok "ペース表示(目標内✓)";; *) ng "ペース表示不正: [$out]";; esac
-case "$out" in *"ctx:47k"*"89%cache"*) ok "ctx+キャッシュ率表示";; *) ng "ctx表示不正: [$out]";; esac
-case "$out" in *"T:1"*) ok "ターン数表示";; *) ng "ターン数不正: [$out]";; esac
-case "$out" in *"◆terse"*) ok "出力スタイル表示";; *) ng "スタイル表示不正: [$out]";; esac
+case "$out" in *"💰 \$0.08/\$5"*"1%"*) ok "予算バー+使用率% 表示";; *) ng "予算バー不正: [$out]";; esac
+case "$out" in *"🧠 47k/120k"*"39%"*) ok "ctxバー+使用率% 表示";; *) ng "ctxバー不正: [$out]";; esac
+case "$out" in *"█"*"░"*) ok "使用率バー(█/░)を描画";; *) ng "バー文字なし: [$out]";; esac
+case "$out" in *"🎯 10T:\$0.80"*) ok "ペース表示(目標内🎯)";; *) ng "ペース表示不正: [$out]";; esac
+case "$out" in *"💾 89%"*) ok "キャッシュ率表示";; *) ng "キャッシュ率不正: [$out]";; esac
+case "$out" in *"🔄 1"*) ok "ターン数表示";; *) ng "ターン数不正: [$out]";; esac
+case "$out" in *"✍️ terse"*) ok "出力スタイル表示";; *) ng "スタイル表示不正: [$out]";; esac
+# 予算超過 → 🛑、ペース超過 → 🔥
+out=$(printf '{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":6.00},"transcript_path":"%s","session_id":"%s"}' "$TR" "$SID" | bash "$STATUS" | strip)
+case "$out" in *"🛑 \$6.00/\$5"*"██████████"*"120%"*) ok "予算超過で🛑・バー満杯・実値%(120)";; *) ng "予算超過表示不正: [$out]";; esac
+case "$out" in *"🔥 10T"*) ok "ペース超過で🔥";; *) ng "ペース超過表示不正: [$out]";; esac
 out=$(printf '{"model":{"display_name":"Sonnet"}}' | bash "$STATUS" 2>&1 | strip)
-case "$out" in "Sonnet") ok "最小入力でも安全に表示(エラーなし)";; *) ng "最小入力で不正: [$out]";; esac
+case "$out" in "🤖 Sonnet") ok "最小入力でも安全に表示(エラーなし)";; *) ng "最小入力で不正: [$out]";; esac
 
 echo "== 8. install.sh 保持マージ =="
 D="$SB/claudehome"; mkdir -p "$D"

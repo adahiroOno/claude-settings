@@ -4,7 +4,7 @@
   "alwaysThinkingEnabled": false,
   "enableAllProjectMcpServers": false,
   "env": {
-    "DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1",
+    "CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1",
     "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
     "CLAUDE_SESSION_BUDGET_USD": "5",
     "CLAUDE_SESSION_BUDGET_WARN_USD": "2.5",

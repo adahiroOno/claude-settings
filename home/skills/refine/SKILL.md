@@ -1,6 +1,7 @@
 ---
 name: refine
 description: 曖昧・大まかな依頼を、実行前に「目的/範囲/制約/完了条件」の仕様に整形してから着手するスキル。大きめの作業(複数ファイル変更・設計・調査)を頼むときに /refine を使うと、投機的な探索とやり直しの手戻りを防げる。Use when the user wants to refine, clarify, or spec out a rough request before execution.
+argument-hint: [依頼内容]
 ---
 
 # refine — 実行前プロンプト整形

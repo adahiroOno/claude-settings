@@ -283,6 +283,10 @@ for h in guard-heavy-read.sh session-budget-guard.sh handoff-notice.sh; do
 done
 ri=$(jq -r '.statusLine.refreshInterval' "$ROOT/home/settings.json")
 [ "$ri" = "5" ] && ok "statusLine.refreshInterval が設定済み(モデル切替等イベント外の変更に追随)" || ng "refreshInterval 未設定: $ri"
+# 仕様ドリフト追随: 公式ドキュメントから削除された env 変数を配布しない
+jq -e '.env.CLAUDE_CODE_DISABLE_TERMINAL_TITLE == "1"' "$ROOT/home/settings.json" >/dev/null && ok "env にタイトル生成停止(公式文書化済みの変数)" || ng "CLAUDE_CODE_DISABLE_TERMINAL_TITLE 未設定"
+jq -e '.env | has("DISABLE_NON_ESSENTIAL_MODEL_CALLS") | not' "$ROOT/home/settings.json" >/dev/null && ok "廃止変数 DISABLE_NON_ESSENTIAL_MODEL_CALLS を配布していない" || ng "廃止変数が settings.json に残存"
+grep -q '^maxTurns: [0-9]' "$ROOT/home/agents/explore.md" && ok "explore に maxTurns 上限(サブエージェント暴走の決定論的天井)" || ng "explore に maxTurns がない"
 
 echo "== 17. プロンプト品質(手戻り削減)レバー =="
 REFINE="$ROOT/home/skills/refine/SKILL.md"

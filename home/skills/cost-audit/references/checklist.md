@@ -25,9 +25,9 @@
 - 修正: 読み取り専用エージェントに `model: haiku` を明示。
 - 効果: 探索コスト約 1/3。
 
-### A-4. `DISABLE_NON_ESSENTIAL_MODEL_CALLS` 未設定 [Medium]
-- 確認: env
-- 修正: `"DISABLE_NON_ESSENTIAL_MODEL_CALLS": "1"` — 装飾的なモデル呼び出しを止める。
+### A-4. 補助的なモデル呼び出しの抑制が未設定 [Medium]
+- 確認: env に `CLAUDE_CODE_DISABLE_TERMINAL_TITLE` があるか。旧 `DISABLE_NON_ESSENTIAL_MODEL_CALLS` は現行ドキュメントから削除されており、設定されていても機能する保証がない(仕様ドリフト)。
+- 修正: `"CLAUDE_CODE_DISABLE_TERMINAL_TITLE": "1"` — 会話内容からの端末タイトル自動生成(ヘッドレス実行ではバックグラウンドの Haiku 呼び出し)を止める。旧変数が残っていたら置き換えを提案。あわせて `"CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1"`(テレメトリ等の非本質通信の一括停止)も確認。
 
 ---
 
@@ -176,7 +176,12 @@
 ### F-4. 誤発火・重複スキル [Medium]
 - 確認: description が曖昧で無関係なタスクでも発火しうるスキル、内容が CLAUDE.md や他スキルと重複するスキル。
 - 問題: 誤発火1回 = 本文読み込み+無関係な指示の混入(コストと品質の両方を損なう)。
-- 修正: description に発火条件(Use when ...)を明記。重複は片方に寄せる(ユーザー承認の上で)。
+- 修正: description に発火条件(Use when ...)を明記。手動起動専用のワークフローには frontmatter `disable-model-invocation: true` を設定(自動発火を仕様として封じる)。重複は片方に寄せる(ユーザー承認の上で)。
+
+### F-5. スキル単位の model / effort / fork 未活用 [Medium]
+- 確認: 各 SKILL.md の frontmatter に `model` / `effort` / `context` の指定があるか。定型・機械的なスキル(フォーマット変換、チェックリスト消化、テンプレート出力)が高価なモデル・高 effort のまま動いていないか。
+- 問題: スキル実行中のモデル・effort はセッション設定を継承する。判断の軽いスキルにメインと同じ単価を払うのは A-3(サブエージェント)と同型の無駄。
+- 修正: 軽いスキルに `model: haiku` や `effort: low` を指定(そのターンのみ有効・設定は汚さない)。大量読み込みを伴う読み取り専用スキルは `context: fork` でメイン文脈への堆積を防ぐ(ただし対話が必要なスキルには不向き)。品質が要るスキルには指定しない — 単価より手戻りの方が高い。
 
 ---
 

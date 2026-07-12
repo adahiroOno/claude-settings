@@ -102,30 +102,39 @@ out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE"); case "$out" in *handoff.md*)
 touch -d '3 days ago' "$W/.claude/handoff.md"
 out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE"); [ -z "$out" ] && ok "48時間超の handoff → 案内なし" || ng "古い handoff を案内した"
 
-echo "== 7. statusline =="
+echo "== 7. statusline(公式 context_window / effort / rate_limits を使用)=="
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }   # ANSI色除去
 TR="$SB/sl.jsonl"; SID=tst-s1
-{ user_line 1; usage_line 1 claude-sonnet-5 3000 2000 42000 500; } > "$TR"   # ctx=47k, cache=42k/47k=89%
-guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1   # 状態ファイル生成
-# cost 0.08/予算5=1%, ctx=47k/120k=39%, cache=42k/47k=89%, pace 10T=$0.80(目標内)
-out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"transcript_path":"%s","session_id":"%s","output_style":{"name":"terse"}}' "$TR" "$SID" | bash "$STATUS" | strip)
-case "$out" in *"💰 \$0.08/\$5"*"1%"*) ok "予算バー+使用率% 表示";; *) ng "予算バー不正: [$out]";; esac
-case "$out" in *"🧠 47k/120k"*"39%"*) ok "ctxバー+使用率% 表示";; *) ng "ctxバー不正: [$out]";; esac
-case "$out" in *"█"*"░"*) ok "使用率バー(█/░)を描画";; *) ng "バー文字なし: [$out]";; esac
-case "$out" in *"🎯 10T:\$0.80"*) ok "ペース表示(目標内🎯)";; *) ng "ペース表示不正: [$out]";; esac
-case "$out" in *"💾 89%"*) ok "キャッシュ率表示";; *) ng "キャッシュ率不正: [$out]";; esac
+{ user_line 1; usage_line 1 claude-sonnet-5 3000 2000 42000 500; } > "$TR"
+guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1   # ターン数の状態ファイル生成
+# 公式 context_window.current_usage を入力JSONで渡す: ctx=3k+2k+42k=47k(閾値12万の39%)、cache=42k/47k=89%
+CW='"context_window":{"current_usage":{"input_tokens":3000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":42000,"output_tokens":500}}'
+out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"transcript_path":"%s","session_id":"%s","output_style":{"name":"terse"},"effort":{"level":"high"},"thinking":{"enabled":true},"rate_limits":{"five_hour":{"used_percentage":23.5}},%s}' "$TR" "$SID" "$CW" | bash "$STATUS" | strip)
+case "$out" in *"⚡ high"*) ok "effort 表示(公式フィールド)";; *) ng "effort不正: [$out]";; esac
+case "$out" in *"💰 \$0.08/\$5"*"1%"*) ok "予算バー+使用率%";; *) ng "予算バー不正: [$out]";; esac
+case "$out" in *"🧠 47k/120k"*"39%"*) ok "ctxバー(公式context_window由来)";; *) ng "ctxバー不正: [$out]";; esac
+case "$out" in *"█"*"░"*) ok "使用率バー(█/░)描画";; *) ng "バー文字なし: [$out]";; esac
+case "$out" in *"🎯 10T:\$0.80"*) ok "ペース表示(目標内🎯)";; *) ng "ペース不正: [$out]";; esac
+case "$out" in *"💾 89%"*) ok "キャッシュ率(current_usage由来)";; *) ng "キャッシュ率不正: [$out]";; esac
 case "$out" in *"🔄 1"*) ok "ターン数表示";; *) ng "ターン数不正: [$out]";; esac
-case "$out" in *"✍️ terse"*) ok "出力スタイル表示";; *) ng "スタイル表示不正: [$out]";; esac
-# 予算超過 → 🛑、ペース超過 → 🔥
-out=$(printf '{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":6.00},"transcript_path":"%s","session_id":"%s"}' "$TR" "$SID" | bash "$STATUS" | strip)
-case "$out" in *"🛑 \$6.00/\$5"*"██████████"*"120%"*) ok "予算超過で🛑・バー満杯・実値%(120)";; *) ng "予算超過表示不正: [$out]";; esac
-case "$out" in *"🔥 10T"*) ok "ペース超過で🔥";; *) ng "ペース超過表示不正: [$out]";; esac
-case "$out" in *"🎫"*) ng "トークン内訳が既定で表示された(opt-inのはず)";; *) ok "トークン内訳は既定オフ";; esac
-# TR: usage in=3000 rd=42000 wr=2000 out=500 → fmt で in:3k rd:42k wr:2k out:500
-out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"transcript_path":"%s","session_id":"%s"}' "$TR" "$SID" | CLAUDE_STATUSLINE_TOKENS=1 bash "$STATUS" | strip)
-case "$out" in *"🎫 in:3k rd:42k wr:2k out:500"*) ok "トークン内訳(CLAUDE_STATUSLINE_TOKENS=1)表示";; *) ng "内訳不正: [$out]";; esac
+case "$out" in *"📊"*"5h:24%"*) ok "レート制限表示(サブスク)";; *) ng "レート制限不正: [$out]";; esac
+case "$out" in *"✍️ terse"*) ok "出力スタイル表示";; *) ng "スタイル不正: [$out]";; esac
+case "$out" in *"💭"*) ok "thinking有効表示";; *) ng "thinking不正: [$out]";; esac
+# effort/rate_limits なし(従量制・非対応モデル想定)→ ⚡・📊 が出ない
+out=$(printf '{"model":{"display_name":"Haiku"},"cost":{"total_cost_usd":0.30},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
+case "$out" in *"⚡"*) ng "effort非対応なのに表示された: [$out]";; *) ok "effort不在時は非表示";; esac
+case "$out" in *"📊"*) ng "レート無しなのに表示された: [$out]";; *) ok "レート不在時は非表示";; esac
+# 予算超過 → 🛑・満杯・実値%
+out=$(printf '{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":6.00},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
+case "$out" in *"🛑 \$6.00/\$5"*"██████████"*"120%"*) ok "予算超過で🛑・満杯・実値%(120)";; *) ng "予算超過不正: [$out]";; esac
+case "$out" in *"🔥 10T"*) ok "ペース超過で🔥";; *) ng "ペース超過不正: [$out]";; esac
+# トークン内訳(opt-in)
+out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
+case "$out" in *"🎫"*) ng "内訳が既定で表示(opt-inのはず): [$out]";; *) ok "トークン内訳は既定オフ";; esac
+out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"session_id":"%s",%s}' "$SID" "$CW" | CLAUDE_STATUSLINE_TOKENS=1 bash "$STATUS" | strip)
+case "$out" in *"🎫 in:3k rd:42k wr:2k out:500"*) ok "トークン内訳(opt-in・current_usage由来)";; *) ng "内訳不正: [$out]";; esac
 out=$(printf '{"model":{"display_name":"Sonnet"}}' | bash "$STATUS" 2>&1 | strip)
-case "$out" in "🤖 Sonnet") ok "最小入力でも安全に表示(エラーなし)";; *) ng "最小入力で不正: [$out]";; esac
+case "$out" in "🤖 Sonnet") ok "最小入力でも安全(エラーなし)";; *) ng "最小入力不正: [$out]";; esac
 
 echo "== 8. install.sh 保持マージ =="
 D="$SB/claudehome"; mkdir -p "$D"

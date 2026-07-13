@@ -107,13 +107,30 @@ TRC="$SB/pace-ctx.jsonl"
 guard_in UserPromptSubmit tst-p4 "" "" "$TRC" | bash "$GUARD" >/dev/null 2>&1
 assert_exit "ctx 超過でも UserPromptSubmit は素通し(肥大警告は PreToolUse 限定)" 0 $?
 
-echo "== 6. handoff-notice =="
+echo "== 6. handoff-notice(本文注入による再開) =="
 W="$SB/proj"; mkdir -p "$W/.claude"
 out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE"); [ -z "$out" ] && ok "handoff なし → 出力なし" || ng "handoff なしで出力あり"
-echo x > "$W/.claude/handoff.md"
-out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE"); case "$out" in *handoff.md*) ok "新しい handoff → 案内あり";; *) ng "案内なし";; esac
+printf '# handoff: statusline改修の続き\n## 再開手順\n1. tests/run-tests.sh を実行\n' > "$W/.claude/handoff.md"
+out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE")
+case "$out" in *"statusline改修の続き"*"tests/run-tests.sh"*) ok "本文をそのまま注入(1ターン目からRead不要で再開可能)";; *) ng "本文注入なし: [$out]";; esac
+case "$out" in *"Read しない"*) ok "再Read不要の指示を含む";; *) ng "再Read指示なし";; esac
+out=$(printf '{"cwd":"%s"}' "$W" | CLAUDE_HANDOFF_NOTICE=min bash "$NOTICE")
+case "$out" in *"statusline改修の続き"*) ng "min モードで本文が注入された";; *handoff.md*) ok "CLAUDE_HANDOFF_NOTICE=min で従来の3行通知";; *) ng "min モード不正: [$out]";; esac
+# git ルート探索: サブディレクトリから起動しても handoff を発見する
+if command -v git >/dev/null 2>&1; then
+  GW="$SB/gitproj"; mkdir -p "$GW/sub/dir" "$GW/.claude"
+  git -C "$GW" init -q 2>/dev/null
+  printf '# handoff: gitルートのメモ\n' > "$GW/.claude/handoff.md"
+  out=$(printf '{"cwd":"%s"}' "$GW/sub/dir" | bash "$NOTICE")
+  case "$out" in *"gitルートのメモ"*) ok "サブディレクトリ起動でも git ルートの handoff を発見";; *) ng "gitルート探索失敗: [$out]";; esac
+fi
+# 巨大 handoff は3000バイトで打ち切り(注入コストの上限保証)
+yes 'あいうえおかきくけこ' | head -200 > "$W/.claude/handoff.md"
+out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE")
+[ "$(printf '%s' "$out" | wc -c)" -lt 3800 ] && ok "注入サイズ上限(3000バイト+定型文)を保証" || ng "注入サイズ超過: $(printf '%s' "$out" | wc -c)B"
+printf '# handoff: x\n' > "$W/.claude/handoff.md"
 touch -d '3 days ago' "$W/.claude/handoff.md"
-out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE"); [ -z "$out" ] && ok "48時間超の handoff → 案内なし" || ng "古い handoff を案内した"
+out=$(printf '{"cwd":"%s"}' "$W" | bash "$NOTICE"); [ -z "$out" ] && ok "48時間超の handoff → 注入なし" || ng "古い handoff を注入した"
 
 echo "== 7. statusline(公式 context_window / effort / rate_limits を使用)=="
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }   # ANSI色除去

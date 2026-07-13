@@ -141,11 +141,11 @@ case "$out" in *"📊"*) ng "レート無しなのに表示された: [$out]";; 
 out=$(printf '{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":6.00},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
 case "$out" in *"🛑 \$6.00/\$5"*"██████████"*"120%"*) ok "予算超過で🛑・満杯・実値%(120)";; *) ng "予算超過不正: [$out]";; esac
 case "$out" in *"🔥 10T"*) ok "ペース超過で🔥";; *) ng "ペース超過不正: [$out]";; esac
-# トークン内訳(opt-in)
+# トークン内訳(2行化に伴い既定オン。CLAUDE_STATUSLINE_TOKENS=0 で非表示)
 out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
-case "$out" in *"🎫"*) ng "内訳が既定で表示(opt-inのはず): [$out]";; *) ok "トークン内訳は既定オフ";; esac
-out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"session_id":"%s",%s}' "$SID" "$CW" | CLAUDE_STATUSLINE_TOKENS=1 bash "$STATUS" | strip)
-case "$out" in *"🎫 in:3k rd:42k wr:2k out:500"*) ok "トークン内訳(opt-in・current_usage由来)";; *) ng "内訳不正: [$out]";; esac
+case "$out" in *"🎫 in:3k rd:42k wr:2k out:500"*) ok "トークン内訳(cache write含む)を既定で表示";; *) ng "内訳不正: [$out]";; esac
+out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"session_id":"%s",%s}' "$SID" "$CW" | CLAUDE_STATUSLINE_TOKENS=0 bash "$STATUS" | strip)
+case "$out" in *"🎫"*) ng "TOKENS=0 なのに内訳が表示: [$out]";; *) ok "CLAUDE_STATUSLINE_TOKENS=0 で非表示に切替可能";; esac
 out=$(printf '{"model":{"display_name":"Sonnet"}}' | bash "$STATUS" 2>&1 | strip)
 case "$out" in "🤖 Sonnet") ok "最小入力でも安全(エラーなし)";; *) ng "最小入力不正: [$out]";; esac
 
@@ -283,9 +283,10 @@ def_ctx=$(jq -r '.env.CLAUDE_CTX_LIMIT_TOKENS' "$ROOT/home/settings.json")
 [ "$def_turn" = "0.10" ] && grep -q '既定 \$1/10T' "$RM" && ok "ペース既定値(10T≒\$1)が一致" || ng "ペース既定値が不一致(settings=$def_turn)"
 [ "$def_ctx" = "120000" ] && grep -q '既定 12万トークン' "$RM" && ok "ctx既定値(12万)が一致" || ng "ctx既定値が不一致(settings=$def_ctx)"
 # hooks 設定側にも3フックが登録されているか(READMEの説明とsettings.jsonの実配線の整合)
-for h in guard-heavy-read.sh session-budget-guard.sh handoff-notice.sh; do
+for h in guard-heavy-read.sh session-budget-guard.sh handoff-notice.sh handoff-autostub.sh; do
   grep -q "$h" "$ROOT/home/settings.json" && ok "settings.json に $h が配線済み" || ng "$h が settings.json に無い"
 done
+jq -e '.hooks.SessionEnd[0].matcher == "clear"' "$ROOT/home/settings.json" >/dev/null && ok "autostub は SessionEnd(matcher: clear)に限定" || ng "SessionEnd matcher 不正"
 ri=$(jq -r '.statusLine.refreshInterval' "$ROOT/home/settings.json")
 [ "$ri" = "5" ] && ok "statusLine.refreshInterval が設定済み(モデル切替等イベント外の変更に追随)" || ng "refreshInterval 未設定: $ri"
 # 仕様ドリフト追随: 公式ドキュメントから削除された env 変数を配布しない
@@ -383,6 +384,36 @@ out1=$(printf '%s' "$SL2" | CLAUDE_STATUSLINE_LINES=1 bash "$STATUS" 2>/dev/null
 sp1=$(printf '%s' "$out1" | sed 's/\x1b\[[0-9;]*m//g')
 case "$sp1" in *"🤖 Sonnet"*"💰"*"📝"*) ok "単一行に全項目(環境系+コスト系)";; *) ng "単一行の項目欠落: [$sp1]";; esac
 grep -q 'CLAUDE_STATUSLINE_LINES' "$RM" && ok "README に2行表示/単一行切替の記載" || ng "README に行数切替の記載がない"
+
+echo "== 21. /clear 時の handoff 自動スタブ(SessionEnd)と /handoff スキル =="
+STUB="$ROOT/home/hooks/handoff-autostub.sh"
+WP="$SB/stubproj"; mkdir -p "$WP/.claude"
+TRS="$SB/stub.jsonl"
+{ user_line 1; usage_line 1 claude-sonnet-5 1000 0 0 500; printf '{"uuid":"u2","type":"user","message":{"role":"user","content":"statuslineを2行にして"}}\n'; } > "$TRS"
+se_in() { printf '{"hook_event_name":"SessionEnd","reason":"%s","cwd":"%s","transcript_path":"%s","session_id":"tst-se1"}' "$1" "$WP" "$TRS"; }
+se_in clear | bash "$STUB"; rc=$?
+[ "$rc" -eq 0 ] && [ -f "$WP/.claude/handoff.md" ] && ok "/clear でスタブを自動生成" || ng "スタブ未生成 (rc=$rc)"
+grep -q "自動生成スタブ" "$WP/.claude/handoff.md" && grep -q "statuslineを2行にして" "$WP/.claude/handoff.md" && ok "スタブに直近プロンプトを収録" || ng "スタブ内容不備"
+grep -q "$TRS" "$WP/.claude/handoff.md" && grep -q "部分検索" "$WP/.claude/handoff.md" && ok "元トランスクリプトへのポインタ+部分検索指示" || ng "ポインタ欠落"
+grep -q "$WP" "$WP/.claude/handoff.md" && ok "ディレクトリと日時をスタブ自身に記録" || ng "cwd 記録なし"
+# 新鮮な(モデルが書いた)handoff は上書きしない
+printf '# 手書きhandoff\n' > "$WP/.claude/handoff.md"
+se_in clear | bash "$STUB"
+grep -q "手書きhandoff" "$WP/.claude/handoff.md" && ok "48時間以内の既存 handoff を上書きしない" || ng "既存 handoff が上書きされた"
+# clear 以外の reason では書かない
+rm -f "$WP/.claude/handoff.md"
+se_in logout | bash "$STUB"
+[ ! -f "$WP/.claude/handoff.md" ] && ok "reason=logout では生成しない(clear 限定)" || ng "clear 以外で生成された"
+# .claude ディレクトリの無いプロジェクトを汚染しない
+WNP="$SB/noclaude"; mkdir -p "$WNP"
+printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_path":"%s"}' "$WNP" "$TRS" | bash "$STUB"
+[ ! -e "$WNP/.claude" ] && ok ".claude の無いディレクトリには何も作らない" || ng "無関係ディレクトリを汚染"
+# 無効化フラグ
+se_in clear | CLAUDE_HANDOFF_AUTOSTUB=0 bash "$STUB"
+[ ! -f "$WP/.claude/handoff.md" ] && ok "CLAUDE_HANDOFF_AUTOSTUB=0 で無効化" || ng "無効化が効かない"
+HOFF="$ROOT/home/skills/handoff/SKILL.md"
+[ -f "$HOFF" ] && grep -q '^name: handoff$' "$HOFF" && ok "/handoff スキル(半自動・モデル品質の引き継ぎ)が存在" || ng "/handoff スキル不備"
+grep -q '40行以内' "$HOFF" && ok "handoff スキルにサイズ上限(40行)を明記" || ng "サイズ上限なし"
 
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"

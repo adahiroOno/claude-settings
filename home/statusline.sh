@@ -131,8 +131,9 @@ fi
 # 変更行数
 if [ -n "$added" ] || [ -n "$removed" ]; then add 2 "📝 ${C_OK}+${added:-0}${R}/${C_WARN}-${removed:-0}${R}"; fi
 
-# トークン内訳(opt-in): 直近リクエストの新規/読出/書込/出力
-if [ "${CLAUDE_STATUSLINE_TOKENS:-0}" = "1" ] && [ "$ctx" -gt 0 ]; then
+# トークン内訳: 直近リクエストの 新規入力/キャッシュ読出/キャッシュ書込/出力。
+# 2行表示で幅に余裕があるため既定で表示(CLAUDE_STATUSLINE_TOKENS=0 で非表示)
+if [ "${CLAUDE_STATUSLINE_TOKENS:-1}" = "1" ] && [ "$ctx" -gt 0 ]; then
   add 2 "${C_DIM}🎫 in:$(fmt "$cu_in") rd:$(fmt "$cu_rd") wr:$(fmt "$cu_wr") out:$(fmt "$cu_out")${R}"
 fi
 

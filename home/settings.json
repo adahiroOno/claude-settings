@@ -94,6 +94,17 @@
           }
         ]
       }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "~/.claude/hooks/handoff-autostub.sh"
+          }
+        ]
+      }
     ]
   },
   "statusLine": {

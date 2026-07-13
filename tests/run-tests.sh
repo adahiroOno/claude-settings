@@ -365,6 +365,25 @@ out2=$(printf '%s' "$NULLCU" | bash "$STATUS" 2>/dev/null); rc2=$?
 [ "$rc2" -eq 0 ] && ok "current_usage=null(公式明記の状態)で exit 0" || ng "null current_usage で exit $rc2"
 case "$(printf '%s' "$out2" | sed 's/\x1b\[[0-9;]*m//g')" in *"Opus"*) ok "null ケースでもモデル表示";; *) ng "null ケースで出力破損";; esac
 
+echo "== 20. statusline 2行表示(既定)と単一行切替 =="
+SL2='{"model":{"display_name":"Sonnet"},"session_id":"tst-2l","transcript_path":"","cost":{"total_cost_usd":0.5,"total_lines_added":10,"total_lines_removed":2},"effort":{"level":"high"},"thinking":{"enabled":true},"context_window":{"current_usage":{"input_tokens":3000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":42000,"output_tokens":500}}}'
+# 既定(2行): 出力に改行が1つ含まれる
+out=$(printf '%s' "$SL2" | bash "$STATUS" 2>/dev/null)
+nl=$(printf '%s' "$out" | wc -l | tr -d ' ')
+[ "$nl" = "1" ] && ok "既定で2行(改行1つ)を出力" || ng "改行数が想定外: $nl"
+sp=$(printf '%s' "$out" | sed 's/\x1b\[[0-9;]*m//g')
+l1=$(printf '%s' "$sp" | sed -n '1p'); l2=$(printf '%s' "$sp" | sed -n '2p')
+# 1行目=環境系(モデル/effort/ctx/thinking)、2行目=コスト系(予算バー/変更行)
+case "$l1" in *"🤖 Sonnet"*"⚡ high"*"🧠"*"💭"*) ok "1行目に 環境・コンテキスト系(model/effort/ctx/thinking)";; *) ng "1行目不正: [$l1]";; esac
+case "$l1" in *"💰"*) ng "予算バーが1行目に混入: [$l1]";; *) ok "予算バーは1行目に無い";; esac
+case "$l2" in *"💰 \$0.50/\$5"*"📝"*"+10"*"-2"*) ok "2行目に コスト・進捗系(予算バー/変更行)";; *) ng "2行目不正: [$l2]";; esac
+# 単一行モード: CLAUDE_STATUSLINE_LINES=1 で改行なし・全項目
+out1=$(printf '%s' "$SL2" | CLAUDE_STATUSLINE_LINES=1 bash "$STATUS" 2>/dev/null)
+[ "$(printf '%s' "$out1" | wc -l | tr -d ' ')" = "0" ] && ok "LINES=1 で単一行(改行なし)" || ng "単一行にならない"
+sp1=$(printf '%s' "$out1" | sed 's/\x1b\[[0-9;]*m//g')
+case "$sp1" in *"🤖 Sonnet"*"💰"*"📝"*) ok "単一行に全項目(環境系+コスト系)";; *) ng "単一行の項目欠落: [$sp1]";; esac
+grep -q 'CLAUDE_STATUSLINE_LINES' "$RM" && ok "README に2行表示/単一行切替の記載" || ng "README に行数切替の記載がない"
+
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

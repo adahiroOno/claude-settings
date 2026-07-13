@@ -2,13 +2,13 @@
 # ステータスライン: 閾値に対する使用率をバーと絵文字で可視化。
 # Claude Code が stdin に渡す公式 JSON(https://code.claude.com/docs/ja/statusline)を利用する。
 #
-# 表示(左から):
-#   🤖 モデル
-#   ⚡ effort(low/medium/high/xhigh/max。モデルが対応する場合)
-#   💰/⚠️/🛑 予算バー   $cost/$上限 [██░░] NN%   ← セッションコスト vs 予算($5)
-#   🧠/🔴 ctxバー        NNk/上限k  [██░░] NN%   ← 現在のコンテキスト vs 肥大ガード閾値(12万)
-#   🎯/🔥 10T換算ペース │ 🔄 ターン │ 💾 キャッシュ読出率 │ 📊 レート制限(サブスク時) │
-#   ✍️ 出力スタイル │ 💭 thinking(有効時)│ 📝 変更行 │ 🎫 トークン内訳(opt-in)
+# 表示(既定は2行。CLAUDE_STATUSLINE_LINES=1 で単一行):
+#   1行目(環境・コンテキスト):
+#     🤖 モデル │ ⚡ effort │ 🧠/🔴 ctxバー(現在/閾値 [██░░] %)│
+#     💾 キャッシュ読出率 │ 📊 レート制限(サブスク時)│ ✍️ 出力スタイル │ 💭 thinking
+#   2行目(コスト・進捗):
+#     💰/⚠️/🛑 予算バー($cost/$上限 [██░░] %)│ 🎯/🔥 10T換算ペース │
+#     🔄 ターン(上限設定時は 現在/上限)│ 📝 変更行 │ 🎫 トークン内訳(opt-in)
 #
 # トークン情報は公式 context_window.current_usage を使用(自作トランスクリプト解析は不要)。
 # ターン数のみ予算ガードの状態ファイル(なければ軽量なトランスクリプト集計)から取得。
@@ -64,31 +64,38 @@ if [ -z "$turns" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c
   turns=$(jq -Rn '[inputs|fromjson? // empty|select(.type=="user")|select(.isMeta!=true)|select(.toolUseResult==null)|(.message.content // empty)|if type=="string" then 1 elif type=="array" then (if any(.[]?;(.type? // "")=="tool_result") then empty else 1 end) else empty end]|length' "$transcript" 2>/dev/null) || turns=""
 fi
 
-segs=()
-segs+=("${C_MODEL}🤖 ${model}${R}")
+# 各セグメントに「行グループ」を付けて格納する。
+#   グループ1 = 環境・コンテキスト(モデル/effort/ctx/キャッシュ/レート制限/スタイル/thinking)
+#   グループ2 = コスト・進捗    (予算バー/ペース/ターン数/変更行/トークン内訳)
+# 表示行数は CLAUDE_STATUSLINE_LINES で切替(既定 2。"1" で従来の単一行)。
+# segs は追加順(=単一行時の並び)を保持し、grp で行を振り分ける。
+segs=(); grp=()
+add() { grp+=("$1"); segs+=("$2"); }   # $1=行グループ, $2=表示文字列
+
+add 1 "${C_MODEL}🤖 ${model}${R}"
 
 # effort(モデルが対応する場合のみ)
-[ -n "$effort" ] && [ "$effort" != "null" ] && segs+=("${C_EFF}⚡ ${effort}${R}")
+[ -n "$effort" ] && [ "$effort" != "null" ] && add 1 "${C_EFF}⚡ ${effort}${R}"
 
 # 予算バー
 if [ -n "$cost" ]; then
   bpct=$(awk -v c="$cost" -v b="$BUDGET" 'BEGIN{ if(b<=0){print 0}else{printf "%d", c/b*100} }')
   emo="💰"; [ "$bpct" -ge 100 ] && emo="🛑"; [ "$bpct" -ge 80 ] && [ "$bpct" -lt 100 ] && emo="⚠️"
-  segs+=("${emo} \$$(printf '%.2f' "$cost")/\$${BUDGET} $(make_bar "$bpct" 10) ${bpct}%")
+  add 2 "${emo} \$$(printf '%.2f' "$cost")/\$${BUDGET} $(make_bar "$bpct" 10) ${bpct}%"
 fi
 
 # ctxバー(現在コンテキスト / 肥大ガード閾値)
 if [ "$ctx" -ge 1000 ]; then
   cpct=$(( ctx * 100 / CTXLIM ))
   cemo="🧠"; { [ "$cpct" -ge 90 ] || [ "$over200k" = "true" ]; } && cemo="🔴"
-  segs+=("${cemo} $(fmt "$ctx")/$(fmt "$CTXLIM") $(make_bar "$cpct" 10) ${cpct}%")
+  add 1 "${cemo} $(fmt "$ctx")/$(fmt "$CTXLIM") $(make_bar "$cpct" 10) ${cpct}%"
 fi
 
 # 10ターン換算ペース
 if [ -n "$cost" ] && [[ "${turns:-}" =~ ^[0-9]+$ ]] && [ "$turns" -ge 1 ]; then
   pace10=$(awk -v c="$cost" -v t="$turns" 'BEGIN{printf "%.2f", c/t*10}')
   target10=$(awk -v b="${CLAUDE_TURN_BUDGET_USD:-0.10}" 'BEGIN{printf "%.2f", b*10}')
-  if awk -v p="$pace10" -v g="$target10" 'BEGIN{exit !(p>g)}'; then segs+=("${C_WARN}🔥 10T:\$${pace10}${R}"); else segs+=("${C_OK}🎯 10T:\$${pace10}${R}"); fi
+  if awk -v p="$pace10" -v g="$target10" 'BEGIN{exit !(p>g)}'; then add 2 "${C_WARN}🔥 10T:\$${pace10}${R}"; else add 2 "${C_OK}🎯 10T:\$${pace10}${R}"; fi
 fi
 
 # ターン数(CLAUDE_TURN_HARD_LIMIT 設定時は n/上限 を使用率の色で表示)
@@ -96,15 +103,15 @@ if [[ "${turns:-}" =~ ^[0-9]+$ ]] && [ "$turns" -ge 1 ]; then
   TLIM="${CLAUDE_TURN_HARD_LIMIT:-0}"
   if [[ "$TLIM" =~ ^[0-9]+$ ]] && [ "$TLIM" -gt 0 ]; then
     tpct=$(( turns * 100 / TLIM ))
-    segs+=("$(pct_color "$tpct")🔄 ${turns}/${TLIM}${R}")
+    add 2 "$(pct_color "$tpct")🔄 ${turns}/${TLIM}${R}"
   else
-    segs+=("${C_DIM}🔄 ${turns}${R}")
+    add 2 "${C_DIM}🔄 ${turns}${R}"
   fi
 fi
 
 # キャッシュ読出率
 if [ "$cachepct" -ge 0 ]; then
-  ccol="$C_OK"; [ "$cachepct" -lt 50 ] && ccol="$C_WARN"; segs+=("${ccol}💾 ${cachepct}%${R}")
+  ccol="$C_OK"; [ "$cachepct" -lt 50 ] && ccol="$C_WARN"; add 1 "${ccol}💾 ${cachepct}%${R}"
 fi
 
 # レート制限(サブスクのみ。トークン枠の消費 = 使いすぎ防止の指標)
@@ -112,23 +119,38 @@ if [ -n "$r5" ] || [ -n "$r7" ]; then
   rl="📊"
   [ -n "$r5" ] && { r5i=$(printf '%.0f' "$r5"); rc=$(pct_color "$r5i"); rl="$rl ${rc}5h:${r5i}%${R}"; }
   [ -n "$r7" ] && { r7i=$(printf '%.0f' "$r7"); rc=$(pct_color "$r7i"); rl="$rl ${rc}7d:${r7i}%${R}"; }
-  segs+=("$rl")
+  add 1 "$rl"
 fi
 
 # 出力スタイル(既定以外)
-[ -n "$style" ] && [ "$style" != "default" ] && [ "$style" != "null" ] && segs+=("${C_STYLE}✍️ ${style}${R}")
+[ -n "$style" ] && [ "$style" != "default" ] && [ "$style" != "null" ] && add 1 "${C_STYLE}✍️ ${style}${R}"
 
 # thinking(有効時のみ)
-[ "$thinking" = "true" ] && segs+=("${C_DIM}💭${R}")
+[ "$thinking" = "true" ] && add 1 "${C_DIM}💭${R}"
 
 # 変更行数
-if [ -n "$added" ] || [ -n "$removed" ]; then segs+=("📝 ${C_OK}+${added:-0}${R}/${C_WARN}-${removed:-0}${R}"); fi
+if [ -n "$added" ] || [ -n "$removed" ]; then add 2 "📝 ${C_OK}+${added:-0}${R}/${C_WARN}-${removed:-0}${R}"; fi
 
 # トークン内訳(opt-in): 直近リクエストの新規/読出/書込/出力
 if [ "${CLAUDE_STATUSLINE_TOKENS:-0}" = "1" ] && [ "$ctx" -gt 0 ]; then
-  segs+=("${C_DIM}🎫 in:$(fmt "$cu_in") rd:$(fmt "$cu_rd") wr:$(fmt "$cu_wr") out:$(fmt "$cu_out")${R}")
+  add 2 "${C_DIM}🎫 in:$(fmt "$cu_in") rd:$(fmt "$cu_rd") wr:$(fmt "$cu_wr") out:$(fmt "$cu_out")${R}"
 fi
 
-out=""
-for i in "${!segs[@]}"; do [ "$i" -eq 0 ] && out="${segs[$i]}" || out="${out}${SEP}${segs[$i]}"; done
-printf '%b' "$out"
+# 指定グループのセグメントを SEP 連結する($1="*" で全グループ=単一行)。空でも安全。
+render_line() {
+  local want="$1" out="" first=1 i
+  for i in "${!segs[@]}"; do
+    if [ "$want" = "*" ] || [ "${grp[$i]}" = "$want" ]; then
+      if [ "$first" -eq 1 ]; then out="${segs[$i]}"; first=0; else out="${out}${SEP}${segs[$i]}"; fi
+    fi
+  done
+  printf '%s' "$out"
+}
+
+if [ "${CLAUDE_STATUSLINE_LINES:-2}" = "1" ]; then
+  printf '%b' "$(render_line '*')"
+else
+  line1=$(render_line 1); line2=$(render_line 2)
+  # 2行目が空(初回API前など)のときは改行を出さず1行にする
+  if [ -n "$line2" ]; then printf '%b\n%b' "$line1" "$line2"; else printf '%b' "$line1"; fi
+fi

@@ -432,6 +432,43 @@ HOFF="$ROOT/home/skills/handoff/SKILL.md"
 [ -f "$HOFF" ] && grep -q '^name: handoff$' "$HOFF" && ok "/handoff スキル(半自動・モデル品質の引き継ぎ)が存在" || ng "/handoff スキル不備"
 grep -q '40行以内' "$HOFF" && ok "handoff スキルにサイズ上限(40行)を明記" || ng "サイズ上限なし"
 
+echo "== 22. handoff アーカイブ(履歴・並行タスク → .claude/notes/) =="
+ARCH="$ROOT/home/hooks/handoff-archive.sh"
+WA="$SB/archproj"; mkdir -p "$WA/.claude"
+printf '# handoff: statusline 2行化の続き\n## 再開手順\n1. done\n' > "$WA/.claude/handoff.md"
+out=$(bash "$ARCH" "$WA"); rc=$?
+[ "$rc" -eq 0 ] && ok "アーカイブ実行が成功" || ng "アーカイブ失敗 (rc=$rc)"
+[ ! -f "$WA/.claude/handoff.md" ] && ok "元 handoff.md は move(削除)される" || ng "handoff.md が残存"
+archived=$(ls "$WA/.claude/notes/"*.md 2>/dev/null | head -1)
+[ -n "$archived" ] && ok "notes/ にアーカイブファイルが生成" || ng "notes/ にファイルなし"
+case "$(basename "$archived")" in *"statusline"*"2行化"*".md") ok "ファイル名=日時+タイトルslug(索引そのもの・日本語保持)";; *) ng "slug 不正: $(basename "$archived")";; esac
+case "$(basename "$archived")" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9]-*) ok "ファイル名先頭が YYYYMMDD-HHMM";; *) ng "日時プレフィックス不正: $(basename "$archived")";; esac
+grep -q "statusline 2行化の続き" "$archived" && ok "本文がそのまま退避されている" || ng "本文が退避されていない"
+# handoff が無いときは安全に no-op(exit 0)
+bash "$ARCH" "$SB/noproj" >/dev/null 2>&1
+assert_exit "handoff.md 不在でも安全(no-op)" 0 $?
+# autostub 連携: CLAUDE_HANDOFF_ARCHIVE=1 かつ陳腐化した実 handoff は退避してからスタブ生成
+WB="$SB/archstub"; mkdir -p "$WB/.claude"
+printf '# handoff: 古い実作業メモ\n## 再開手順\n1. x\n' > "$WB/.claude/handoff.md"
+touch -d '3 days ago' "$WB/.claude/handoff.md"   # >48h → スタブ上書き対象
+TRB="$SB/archstub.jsonl"; { user_line 1; usage_line 1 claude-sonnet-5 1000 0 0 500; } > "$TRB"
+printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_path":"%s"}' "$WB" "$TRB" | CLAUDE_HANDOFF_ARCHIVE=1 bash "$STUB"
+ls "$WB/.claude/notes/"*"古い実作業メモ"*.md >/dev/null 2>&1 && ok "autostub: 陳腐化した実 handoff を退避してから上書き" || ng "退避されなかった"
+grep -q "自動生成スタブ" "$WB/.claude/handoff.md" && ok "退避後に新しい自動スタブを生成" || ng "スタブが生成されていない"
+# 自動生成スタブ自身は退避しない(ノイズ回避)
+WC="$SB/archstub2"; mkdir -p "$WC/.claude/notes"
+printf '# handoff(自動生成スタブ)\n- 生成: x\n' > "$WC/.claude/handoff.md"
+touch -d '3 days ago' "$WC/.claude/handoff.md"
+printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_path":"%s"}' "$WC" "$TRB" | CLAUDE_HANDOFF_ARCHIVE=1 bash "$STUB"
+[ -z "$(ls "$WC/.claude/notes/" 2>/dev/null)" ] && ok "自動生成スタブは退避しない(履歴ノイズ回避)" || ng "スタブが退避された"
+# アーカイブ運用が既定オフ(削除運用)であること
+WD="$SB/archoff"; mkdir -p "$WD/.claude"
+printf '# handoff: 退避対象外\n' > "$WD/.claude/handoff.md"; touch -d '3 days ago' "$WD/.claude/handoff.md"
+printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_path":"%s"}' "$WD" "$TRB" | bash "$STUB"
+[ ! -d "$WD/.claude/notes" ] && ok "CLAUDE_HANDOFF_ARCHIVE 未設定なら notes/ を作らない(既定は削除運用)" || ng "既定でアーカイブが作動した"
+grep -q '^name: handoff$' "$HOFF" && grep -q 'handoff-archive.sh' "$HOFF" && ok "/handoff スキルがアーカイブ手順を案内" || ng "スキルにアーカイブ案内なし"
+grep -q 'notes/' "$ROOT/project-template/.gitignore" && ok "project-template の .gitignore が notes/ を既定除外" || ng ".gitignore に notes/ がない"
+
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

@@ -55,8 +55,9 @@ claude-settings/
 │   ├── hooks/
 │   │   ├── guard-heavy-read.sh       # Bash経由の巨大ファイル全文読みをブロック
 │   │   ├── session-budget-guard.sh   # 予算・ペース・ターン数のサーキットブレーカー
-│   │   ├── handoff-notice.sh         # /clear後の作業再開(ハンドオフ検知・低コスト)
-│   │   └── handoff-autostub.sh       # /clear時に引き継ぎスタブを自動生成(SessionEnd・モデル未関与)
+│   │   ├── handoff-notice.sh         # /clear後の作業再開(SessionStartで本文を注入・低コスト)
+│   │   ├── handoff-autostub.sh       # /clear時に引き継ぎスタブを自動生成(SessionEnd・モデル未関与)
+│   │   └── handoff-archive.sh        # handoffを .claude/notes/ に日時付きで退避(履歴・並行タスク)
 │   ├── agents/
 │   │   └── explore.md           # Haiku で動く読み取り専用の探索サブエージェント
 │   ├── output-styles/

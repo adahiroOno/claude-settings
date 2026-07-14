@@ -35,6 +35,14 @@ if [ -f "$handoff" ] && find "$handoff" -mtime -2 2>/dev/null | grep -q .; then
   exit 0
 fi
 
+# アーカイブ運用時: ここに来た時点で残っている handoff は陳腐化(>48h)して
+# スタブで上書きされる運命。モデルが書いた実 handoff なら notes/ に退避して履歴を残す
+# (自動生成スタブは退避しない=ノイズ回避)。CLAUDE_HANDOFF_ARCHIVE=1 で有効。
+if [ -f "$handoff" ] && [ "${CLAUDE_HANDOFF_ARCHIVE:-0}" = "1" ] \
+   && ! grep -q '自動生成スタブ' "$handoff" 2>/dev/null; then
+  bash "$(dirname "$0")/handoff-archive.sh" "$cwd" >/dev/null 2>&1 || true
+fi
+
 branch=""
 command -v git >/dev/null 2>&1 && branch=$(git -C "$cwd" branch --show-current 2>/dev/null || true)
 

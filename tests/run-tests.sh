@@ -469,6 +469,13 @@ printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_
 grep -q '^name: handoff$' "$HOFF" && grep -q 'handoff-archive.sh' "$HOFF" && ok "/handoff スキルがアーカイブ手順を案内" || ng "スキルにアーカイブ案内なし"
 grep -q 'notes/' "$ROOT/project-template/.gitignore" && ok "project-template の .gitignore が notes/ を既定除外" || ng ".gitignore に notes/ がない"
 
+echo "== 23. モデル/effort 過剰検知の規範(双方向)=="
+grep -q '逆方向も点検する' "$ROOT/home/CLAUDE.md" && ok "CLAUDE.md に過剰検知(下位提案)の規範がある" || ng "過剰検知の規範がない"
+grep -q 'モデル自身は変更不可' "$ROOT/home/CLAUDE.md" && ok "規範が「提案のみ・実切替はユーザー操作」の限界を明記" || ng "限界の明記がない"
+tok2=$(bash "$EST" "$ROOT/home/CLAUDE.md" | awk 'NR==2{print $4}')
+[ "$tok2" -lt 1000 ] 2>/dev/null && ok "規範追加後も CLAUDE.md が1000トークン未満($tok2)" || ng "CLAUDE.md が肥大化: $tok2 トークン"
+grep -q '双方向' "$ROOT/docs/cost-optimization.md" && ok "docs にモデル規範が双方向である旨を記載" || ng "docs に双方向の記載がない"
+
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"
 [ "$FAIL" -eq 0 ]

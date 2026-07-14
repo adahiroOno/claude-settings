@@ -123,6 +123,16 @@ guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1; assert_ex
 TR2="$SB/pace-ok.jsonl"
 for i in 1 2 3 4 5; do user_line "$i"; usage_line "$i" claude-sonnet-5 5000 0 0 3000; done > "$TR2"   # $0.30 < 0.6
 guard_in PreToolUse tst-p2 Read x "$TR2" | bash "$GUARD" >/dev/null 2>&1; assert_exit "ペース内は無干渉" 0 $?
+# 高価モデルでのペース超過 → モデル/effort 引き下げレバーを決定論的に案内(実測モデル依存)
+TRM="$SB/pace-opus.jsonl"; SIDM=tst-pm1
+for i in 1 2 3 4 5; do user_line "$i"; usage_line "$i" claude-opus-4-8 10000 0 0 14000; done > "$TRM"
+msg=$(guard_in PreToolUse $SIDM Read x "$TRM" | bash "$GUARD" 2>&1 >/dev/null || true)
+case "$msg" in *"高価なモデル"*"opus"*"/model sonnet"*) ok "opus でペース超過時にモデル引き下げレバーを案内";; *) ng "モデルレバー案内なし: [$msg]";; esac
+# Sonnet(標準単価)でのペース超過ではモデルレバーを出さない(誤提案の防止)
+TRS="$SB/pace-sonnet.jsonl"; SIDS=tst-ps1
+for i in 1 2 3 4 5; do user_line "$i"; usage_line "$i" claude-sonnet-5 10000 0 0 14000; done > "$TRS"
+msg=$(guard_in PreToolUse $SIDS Read x "$TRS" | bash "$GUARD" 2>&1 >/dev/null || true)
+case "$msg" in *"高価なモデル"*) ng "sonnet なのにモデル引き下げを提案した: [$msg]";; *) ok "標準単価モデルではモデルレバーを出さない";; esac
 # 公式仕様: UserPromptSubmit の exit 2 はプロンプトを消去し stderr はユーザーのみ。
 # ペース・肥大・警告の3段は UserPromptSubmit で発火してはならない(プロンプト誤消去の防止)。
 guard_in UserPromptSubmit tst-p3 "" "" "$TR" | bash "$GUARD" >/dev/null 2>&1
@@ -495,11 +505,13 @@ grep -q '^name: handoff$' "$HOFF" && grep -q 'handoff-archive.sh' "$HOFF" && ok 
 grep -q 'notes/' "$ROOT/project-template/.gitignore" && ok "project-template の .gitignore が notes/ を既定除外" || ng ".gitignore に notes/ がない"
 
 echo "== 23. モデル/effort 過剰検知の規範(双方向)=="
-grep -q '逆方向も点検する' "$ROOT/home/CLAUDE.md" && ok "CLAUDE.md に過剰検知(下位提案)の規範がある" || ng "過剰検知の規範がない"
-grep -q 'モデル自身は変更不可' "$ROOT/home/CLAUDE.md" && ok "規範が「提案のみ・実切替はユーザー操作」の限界を明記" || ng "限界の明記がない"
+grep -q '過剰側の提案は控えめに' "$ROOT/home/CLAUDE.md" && ok "CLAUDE.md に過剰検知(下位提案・控えめ)の規範がある" || ng "過剰検知の規範がない"
+grep -q '切替はユーザー操作が必要' "$ROOT/home/CLAUDE.md" && ok "規範が「提案のみ・実切替はユーザー操作」の限界を明記" || ng "限界の明記がない"
 tok2=$(bash "$EST" "$ROOT/home/CLAUDE.md" | awk 'NR==2{print $4}')
 [ "$tok2" -lt 1000 ] 2>/dev/null && ok "規範追加後も CLAUDE.md が1000トークン未満($tok2)" || ng "CLAUDE.md が肥大化: $tok2 トークン"
 grep -q '双方向' "$ROOT/docs/cost-optimization.md" && ok "docs にモデル規範が双方向である旨を記載" || ng "docs に双方向の記載がない"
+grep -q 'launch-effort pin' "$ROOT/docs/cost-optimization.md" && ok "docs が effort 固定(変更不可)ケースに言及" || ng "effort 固定への言及がない"
+grep -q 'セッション一度きり' "$ROOT/home/CLAUDE.md" && ok "CLAUDE.md の下位提案がナグ防止(一度きり)に制約" || ng "ナグ防止の制約がない"
 
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"

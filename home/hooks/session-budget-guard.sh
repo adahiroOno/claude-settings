@@ -273,6 +273,12 @@ if [ "$event" = "PreToolUse" ] && [ "${turns:-0}" -ge 3 ]; then
       printf '%s' "$turns" > "$pmarker"
       pace10=$(awk -v c="$cost" -v t="$turns" 'BEGIN{printf "%.2f", c / t * 10}')
       target10=$(awk -v b="$TURNB" 'BEGIN{printf "%.2f", b * 10}')
+      # 現在(直近)のモデルを決定論的に取得。高価モデル(opus/fable/mythos)で
+      # ペース超過しているなら、モデル/effort 引き下げが最大の削減レバーになりうる
+      # ため案内する。判定はトランスクリプトの実測値で、モデルの自己識別に依存しない。
+      # 発火は5ターンに1回に絞られているため、この tail+jq の追加コストは無視できる。
+      lastmodel=$(tail -c 200000 "$transcript" 2>/dev/null \
+        | jq -Rrn '[inputs|fromjson? // empty|select(.message.model!=null)|.message.model]|last // empty' 2>/dev/null || true)
       {
         echo "ペース超過: ここまで ${turns} ターンで推定 \$${cost_fmt}(10ターン換算 \$${pace10}、目標 \$${target10})。"
         echo "品質を落とすのではなく、無駄を削って目標ペースに戻すこと:"
@@ -281,6 +287,10 @@ if [ "$event" = "PreToolUse" ] && [ "${turns:-0}" -ge 3 ]; then
         echo " - 出力は結論と変更箇所のみ。ファイル全文や長い引用の再掲をしない"
         echo " - 同じ検証やビルドを不必要に繰り返さない"
         echo " - 現在のタスクに不要な文脈が多いなら、ユーザーに /compact を提案する"
+        case "$lastmodel" in
+          *opus*|*fable*|*mythos*)
+            echo " - 現在は高価なモデル(${lastmodel})です。いまの作業が難所(設計判断・数回試して解けない類)でないなら、モデル/effort の引き下げが最大の削減レバー。ユーザーに「/model sonnet(必要なら効いていれば /effort を下げる)で十分そうです」と一度だけ提案してよい。難所ならこのまま維持する。" ;;
+        esac
         echo "この指示を反映したら、同じツール呼び出しを再実行して作業を続行してください。タスクの完遂が最優先であることは変わらない。"
       } >&2
       exit 2

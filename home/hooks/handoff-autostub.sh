@@ -13,6 +13,11 @@
 #   - $cwd/.claude ディレクトリが存在するプロジェクトのみ対象(無関係な
 #     ディレクトリに .claude/ を作って汚染しない)。
 #   - 無効化: CLAUDE_HANDOFF_AUTOSTUB=0
+#
+# 複数セッションの衝突回避: スタブは共有の handoff.md ではなく
+# **セッション別ファイル** handoff-<session先頭8桁>.md に書く。同一プロジェクトで
+# 並行するセッションが互いのスタブを上書きしない。再開側(handoff-notice)は
+# handoff.md と handoff-*.md のうち最新のものを注入する。
 set -u
 export LC_NUMERIC=C
 
@@ -27,19 +32,27 @@ reason=$(printf '%s' "$input" | jq -r '.reason // empty')
 
 cwd=$(printf '%s' "$input" | jq -r '.cwd // empty')
 transcript=$(printf '%s' "$input" | jq -r '.transcript_path // empty')
+sid=$(printf '%s' "$input" | jq -r '.session_id // empty')
 [ -n "$cwd" ] && [ -d "$cwd/.claude" ] || exit 0
 
-handoff="$cwd/.claude/handoff.md"
-# Claude が書いた新鮮な handoff があれば尊重して触らない
-if [ -f "$handoff" ] && find "$handoff" -mtime -2 2>/dev/null | grep -q .; then
+# 陳腐化(>48h)した過去のセッションスタブを掃除(蓄積防止・自分の書き込み前に)
+find "$cwd/.claude" -maxdepth 1 -name 'handoff-*.md' -mtime +2 -delete 2>/dev/null || true
+
+# 出力先はセッション別。session_id が取れなければ共有名にフォールバック。
+sid8=$(printf '%s' "$sid" | tr -cd 'A-Za-z0-9' | cut -c1-8)
+if [ -n "$sid8" ]; then handoff="$cwd/.claude/handoff-$sid8.md"; else handoff="$cwd/.claude/handoff.md"; fi
+
+# モデルが書いた新鮮な共有 handoff.md があれば、良質なバトンが既にあるので
+# 冗長なスタブは書かない(この判定は共有ファイルに対して行う)。
+shared="$cwd/.claude/handoff.md"
+if [ -f "$shared" ] && find "$shared" -mtime -2 2>/dev/null | grep -q .; then
   exit 0
 fi
 
-# アーカイブ運用時: ここに来た時点で残っている handoff は陳腐化(>48h)して
-# スタブで上書きされる運命。モデルが書いた実 handoff なら notes/ に退避して履歴を残す
-# (自動生成スタブは退避しない=ノイズ回避)。CLAUDE_HANDOFF_ARCHIVE=1 で有効。
-if [ -f "$handoff" ] && [ "${CLAUDE_HANDOFF_ARCHIVE:-0}" = "1" ] \
-   && ! grep -q '自動生成スタブ' "$handoff" 2>/dev/null; then
+# アーカイブ運用時: 陳腐化した共有 handoff.md(モデルが書いた実メモ)が残っていれば
+# notes/ に退避して履歴を残す(自動生成スタブは退避しない=ノイズ回避)。
+if [ -f "$shared" ] && [ "${CLAUDE_HANDOFF_ARCHIVE:-0}" = "1" ] \
+   && ! grep -q '自動生成スタブ' "$shared" 2>/dev/null; then
   bash "$(dirname "$0")/handoff-archive.sh" "$cwd" >/dev/null 2>&1 || true
 fi
 
@@ -51,9 +64,12 @@ if [ -n "$transcript" ] && [ -f "$transcript" ]; then
   # 末尾512KBだけ読む(1.5秒制限内で確実に終わらせる)。ユーザーの実プロンプトの直近5件。
   prompts=$(tail -c 524288 "$transcript" 2>/dev/null | jq -Rr '
     fromjson? // empty
-    | select(.type == "user") | select(.isMeta != true) | select(.toolUseResult == null)
+    | select(.type == "user") | select(.isMeta != true)
+    | select(.isSidechain != true) | select(.isCompactSummary != true)
+    | select(.toolUseResult == null)
     | .message.content
     | if type == "string" then . else empty end
+    | select(test("^<command-|^<local-command|^This session is being continued") | not)
     | gsub("[\\n\\r]"; " ") | .[0:160]' 2>/dev/null | tail -n 5 | sed 's/^/- /')
 fi
 

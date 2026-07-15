@@ -154,6 +154,46 @@ fi
 
 cost=$(awk -v r="$raw" 'BEGIN{printf "%.6f", r / 1000000}')
 
+# ---- 1日の合計コスト累積(セッション横断・/clear やセッション終了でズレない)-------
+# 設計: セッション別の「当日寄与」を単調増加で積む。日次合計は当日の全セッション
+# 寄与ファイルの総和(statusline が表示)。共有ファイルへの競合書き込みを避けるため、
+# 各セッションは自分の寄与ファイルだけを更新する。
+#   - /clear でセッションコストが 0 に戻っても、delta=max(0, 現在-前回) が 0 になる
+#     だけで、既に積んだ当日寄与は減らない(過去分を保持)。
+#   - 日跨ぎ・resume(--continue)・新規セッションの初回は「再ベースライン」して
+#     過去日の累積を当日へ二重計上しない(ズレ防止を最優先。初回の微少分のみ切り捨て)。
+# 保存先は永続(TMPDIR ではなく CLAUDE_CONFIG_DIR。セッション終了後も残す)。
+# コストが 0 でも base は毎回更新する。そうしないと /clear 直後(コスト≈0)に base が
+# 下落前の高い値のまま残り、次の積み増しが「まだ下落中」扱いで取りこぼされる。
+if [[ "$cost" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then
+  ddir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cost-daily"
+  if mkdir -p "$ddir" 2>/dev/null; then
+    today=$(date +%Y%m%d)
+    basef="$ddir/session-${session}.base"      # "前回コスト 前回日付"
+    sumf="$ddir/${today}-${session}.sum"        # 当日このセッションの寄与(単調増加)
+    # 基準値 base_lc の決め方(過去日の二重計上を防ぎつつ、新規セッションの初回分は取りこぼさない):
+    #   - base ファイルなし(このセッション初出) → 基準 0(初回コストを全額計上)
+    #   - 同日の記録あり → 前回コストが基準(増分のみ加算)
+    #   - 別日の記録あり(日跨ぎ/resume) → 基準を現在コストに置き、当日は増分のみ計上
+    #     (前日までに積んだ分を当日へ持ち込まない)
+    if [ -f "$basef" ]; then
+      read -r b_cost b_date < "$basef" 2>/dev/null || { b_cost=0; b_date="none"; }
+      [[ "$b_cost" =~ ^[0-9]+(\.[0-9]+)?$ ]] || b_cost=0
+      if [ "$b_date" = "$today" ]; then base_lc="$b_cost"; else base_lc="$cost"; fi
+    else
+      base_lc=0
+    fi
+    # /clear・/compact でコストが基準を下回ったら delta は 0(既に積んだ当日寄与は減らさない)
+    d_add=$(awk -v c="$cost" -v p="$base_lc" 'BEGIN{d=c-p; printf "%.6f", (d>0)?d:0}')
+    if awk -v d="$d_add" 'BEGIN{exit !(d + 0 > 0)}'; then
+      cur=0; [ -f "$sumf" ] && { read -r cur < "$sumf" 2>/dev/null || cur=0; [[ "$cur" =~ ^[0-9]+(\.[0-9]+)?$ ]] || cur=0; }
+      awk -v a="$cur" -v b="$d_add" 'BEGIN{printf "%.6f\n", a + b}' > "$sumf"
+    fi
+    printf '%s %s\n' "$cost" "$today" > "$basef"
+  fi
+fi
+# -----------------------------------------------------------------------------
+
 # 仕様ドリフト検知②: セッションが十分進んでいる(200KB超)のに usage もターンも
 # 一切解釈できていない場合、トランスクリプトのスキーマ変更の可能性。一度だけ警告。
 if [ "$size" -gt 200000 ] && [ "${turns:-0}" -eq 0 ] && awk -v r="$raw" 'BEGIN{exit !(r + 0 == 0)}'; then

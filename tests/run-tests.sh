@@ -29,6 +29,10 @@ export TMPDIR="$SB/tmp"; mkdir -p "$TMPDIR"
 # 隔離しないと本番 $HOME/.claude の古い値との差分で「更新通知」が紛れ込み、
 # handoff テストがフレーキーになる(section 13 は自前の CFG を明示指定して上書き)。
 export CLAUDE_CONFIG_DIR="$SB/cfghome"; mkdir -p "$CLAUDE_CONFIG_DIR"
+# statusline の 1日合計(📅)は cost-daily/ の当日寄与を全セッション合算するため、
+# テスト中に各セクションのガード実行が積む寄与が後続の statusline 描画へ漏れ出す。
+# 既定でオフにして描画を決定論的にし、24 章だけ明示的に CLAUDE_STATUSLINE_DAILY=1 で検証する。
+export CLAUDE_STATUSLINE_DAILY=0
 cleanup() { rm -rf "$SB"; }
 trap cleanup EXIT
 
@@ -36,6 +40,12 @@ user_line()  { printf '{"uuid":"u%s","type":"user","message":{"role":"user","con
 usage_line() { # id model in cc cr out
   printf '{"uuid":"a%s","type":"assistant","message":{"id":"m%s","model":"%s","usage":{"input_tokens":%d,"cache_creation_input_tokens":%d,"cache_read_input_tokens":%d,"output_tokens":%d}}}\n' \
     "$1" "$1" "$2" "$3" "$4" "$5" "$6"
+}
+# 予算ガードの状態ファイルを決定論的にシードする(statusline のコスト/ターン表示検証用)。
+# 形式: "offset raw turns ctx"。offset=0 にすることでトランスクリプトの有無や
+# サイズに関係なく陳腐化判定を通過し、raw/1e6 のコストが必ず表示される。
+seed_state() { # session raw turns [ctx]
+  printf '0 %s %s %s\n' "$2" "$3" "${4:-1000}" > "$TMPDIR/claude-budget-state-$1"
 }
 guard_in() { # event session tool fpath transcript
   printf '{"hook_event_name":"%s","transcript_path":"%s","session_id":"%s","tool_name":"%s","tool_input":{"file_path":"%s"}}' "$1" "$5" "$2" "$3" "$4"
@@ -171,7 +181,9 @@ echo "== 7. statusline(公式 context_window / effort / rate_limits を使用)==
 strip() { sed 's/\x1b\[[0-9;]*m//g'; }   # ANSI色除去
 TR="$SB/sl.jsonl"; SID=tst-s1
 { user_line 1; usage_line 1 claude-sonnet-5 3000 2000 42000 500; } > "$TR"
-guard_in PreToolUse $SID Read x "$TR" | bash "$GUARD" >/dev/null 2>&1   # ターン数の状態ファイル生成
+# コストとターン数は予算ガードの状態ファイル由来(公式 cost.total_cost_usd は使わない)。
+# 決定論的に検証するため直接シードする: raw=80000 → $0.08、turns=1。
+seed_state "$SID" 80000 1
 # 公式 context_window.current_usage を入力JSONで渡す: ctx=3k+2k+42k=47k(閾値12万の39%)、cache=42k/47k=89%
 CW='"context_window":{"current_usage":{"input_tokens":3000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":42000,"output_tokens":500}}'
 out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},"transcript_path":"%s","session_id":"%s","output_style":{"name":"terse"},"effort":{"level":"high"},"thinking":{"enabled":true},"rate_limits":{"five_hour":{"used_percentage":23.5}},%s}' "$TR" "$SID" "$CW" | bash "$STATUS" | strip)
@@ -189,8 +201,9 @@ case "$out" in *"💭"*) ok "thinking有効表示";; *) ng "thinking不正: [$ou
 out=$(printf '{"model":{"display_name":"Haiku"},"cost":{"total_cost_usd":0.30},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
 case "$out" in *"⚡"*) ng "effort非対応なのに表示された: [$out]";; *) ok "effort不在時は非表示";; esac
 case "$out" in *"📊"*) ng "レート無しなのに表示された: [$out]";; *) ok "レート不在時は非表示";; esac
-# 予算超過 → 🛑・満杯・実値%
-out=$(printf '{"model":{"display_name":"Opus"},"cost":{"total_cost_usd":6.00},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
+# 予算超過 → 🛑・満杯・実値%(状態を $6.00 に再シード)
+seed_state "$SID" 6000000 1
+out=$(printf '{"model":{"display_name":"Opus"},"session_id":"%s",%s}' "$SID" "$CW" | bash "$STATUS" | strip)
 case "$out" in *"🛑 \$6.00/\$5"*"██████████"*"120%"*) ok "予算超過で🛑・満杯・実値%(120)";; *) ng "予算超過不正: [$out]";; esac
 case "$out" in *"🔥 10T"*) ok "ペース超過で🔥";; *) ng "ペース超過不正: [$out]";; esac
 # トークン内訳(2行化に伴い既定オン。CLAUDE_STATUSLINE_TOKENS=0 で非表示)
@@ -401,12 +414,14 @@ rm -f "${TMPDIR:-/tmp}/claude-budget-turnwarn-$SID" "${TMPDIR:-/tmp}/claude-budg
 
 echo "== 19. statusline 公式サンプルJSON準拠(docs掲載のフルスキーマ) =="
 OFFICIAL='{"cwd":"/w","session_id":"tst-off1","transcript_path":"/nonexistent.jsonl","model":{"id":"claude-opus-4-8","display_name":"Opus"},"workspace":{"current_dir":"/w","project_dir":"/w","added_dirs":[]},"version":"2.1.90","output_style":{"name":"default"},"cost":{"total_cost_usd":0.01234,"total_duration_ms":45000,"total_api_duration_ms":2300,"total_lines_added":156,"total_lines_removed":23},"context_window":{"total_input_tokens":15500,"total_output_tokens":1200,"context_window_size":200000,"used_percentage":8,"remaining_percentage":92,"current_usage":{"input_tokens":8500,"output_tokens":1200,"cache_creation_input_tokens":5000,"cache_read_input_tokens":2000}},"exceeds_200k_tokens":false,"effort":{"level":"high"},"thinking":{"enabled":true},"rate_limits":{"five_hour":{"used_percentage":23.5,"resets_at":1738425600},"seven_day":{"used_percentage":41.2,"resets_at":1738857600}}}'
+# 予算バーはガード状態由来(公式 total_cost_usd は使わない設計)。$0.01 相当をシード。
+seed_state "tst-off1" 12340 1
 out=$(printf '%s' "$OFFICIAL" | bash "$STATUS" 2>/dev/null); rc=$?
 [ "$rc" -eq 0 ] && ok "公式サンプルで exit 0" || ng "公式サンプルで exit $rc"
 p=$(printf '%s' "$out" | sed 's/\x1b\[[0-9;]*m//g')
 case "$p" in *"Opus"*) ok "モデル表示";; *) ng "モデル欠落: [$p]";; esac
 case "$p" in *"⚡ high"*) ok "effort.level を表示";; *) ng "effort 欠落";; esac
-case "$p" in *'$0.01/$5'*) ok "cost.total_cost_usd を予算バーに反映";; *) ng "予算表示不正: [$p]";; esac
+case "$p" in *'$0.01/$5'*) ok "予算バー(ガード状態のセッションコスト推定)を反映";; *) ng "予算表示不正: [$p]";; esac
 case "$p" in *"💾 12%"*) ok "cache_read 比率 12%(2000/15500)";; *) ng "キャッシュ率不正: [$p]";; esac
 case "$p" in *"5h:24%"*"7d:41%"*) ok "rate_limits の小数を整数%表示";; *) ng "レート制限表示不正: [$p]";; esac
 case "$p" in *"💭"*) ok "thinking.enabled で 💭";; *) ng "thinking 欠落";; esac
@@ -420,6 +435,8 @@ case "$(printf '%s' "$out2" | sed 's/\x1b\[[0-9;]*m//g')" in *"Opus"*) ok "null 
 
 echo "== 20. statusline 2行表示(既定)と単一行切替 =="
 SL2='{"model":{"display_name":"Sonnet"},"session_id":"tst-2l","transcript_path":"","cost":{"total_cost_usd":0.5,"total_lines_added":10,"total_lines_removed":2},"effort":{"level":"high"},"thinking":{"enabled":true},"context_window":{"current_usage":{"input_tokens":3000,"cache_creation_input_tokens":2000,"cache_read_input_tokens":42000,"output_tokens":500}}}'
+# 予算バーはガード状態由来。$0.50 相当をシード(トランスクリプト空でも offset=0 で表示)。
+seed_state "tst-2l" 500000 1
 # 既定(2行): 出力に改行が1つ含まれる
 out=$(printf '%s' "$SL2" | bash "$STATUS" 2>/dev/null)
 nl=$(printf '%s' "$out" | wc -l | tr -d ' ')
@@ -443,26 +460,29 @@ WP="$SB/stubproj"; mkdir -p "$WP/.claude"
 TRS="$SB/stub.jsonl"
 { user_line 1; usage_line 1 claude-sonnet-5 1000 0 0 500; printf '{"uuid":"u2","type":"user","message":{"role":"user","content":"statuslineを2行にして"}}\n'; } > "$TRS"
 se_in() { printf '{"hook_event_name":"SessionEnd","reason":"%s","cwd":"%s","transcript_path":"%s","session_id":"tst-se1"}' "$1" "$WP" "$TRS"; }
+# スタブはセッション別ファイル: session_id "tst-se1" → sid8 "tstse1" → handoff-tstse1.md
+SF="$WP/.claude/handoff-tstse1.md"
 se_in clear | bash "$STUB"; rc=$?
-[ "$rc" -eq 0 ] && [ -f "$WP/.claude/handoff.md" ] && ok "/clear でスタブを自動生成" || ng "スタブ未生成 (rc=$rc)"
-grep -q "自動生成スタブ" "$WP/.claude/handoff.md" && grep -q "statuslineを2行にして" "$WP/.claude/handoff.md" && ok "スタブに直近プロンプトを収録" || ng "スタブ内容不備"
-grep -q "$TRS" "$WP/.claude/handoff.md" && grep -q "部分検索" "$WP/.claude/handoff.md" && ok "元トランスクリプトへのポインタ+部分検索指示" || ng "ポインタ欠落"
-grep -q "$WP" "$WP/.claude/handoff.md" && ok "ディレクトリと日時をスタブ自身に記録" || ng "cwd 記録なし"
-# 新鮮な(モデルが書いた)handoff は上書きしない
+[ "$rc" -eq 0 ] && [ -f "$SF" ] && ok "/clear でスタブを自動生成(セッション別ファイル)" || ng "スタブ未生成 (rc=$rc)"
+grep -q "自動生成スタブ" "$SF" && grep -q "statuslineを2行にして" "$SF" && ok "スタブに直近プロンプトを収録" || ng "スタブ内容不備"
+grep -q "$TRS" "$SF" && grep -q "部分検索" "$SF" && ok "元トランスクリプトへのポインタ+部分検索指示" || ng "ポインタ欠落"
+grep -q "$WP" "$SF" && ok "ディレクトリと日時をスタブ自身に記録" || ng "cwd 記録なし"
+# 新鮮な(モデルが書いた)共有 handoff.md があれば、良質なバトンがある前提でスタブを作らない
 printf '# 手書きhandoff\n' > "$WP/.claude/handoff.md"
+rm -f "$SF"
 se_in clear | bash "$STUB"
-grep -q "手書きhandoff" "$WP/.claude/handoff.md" && ok "48時間以内の既存 handoff を上書きしない" || ng "既存 handoff が上書きされた"
+[ ! -f "$SF" ] && grep -q "手書きhandoff" "$WP/.claude/handoff.md" && ok "48時間以内の共有 handoff があればスタブを作らない(上書きしない)" || ng "既存 handoff が上書きされた"
 # clear 以外の reason では書かない
-rm -f "$WP/.claude/handoff.md"
+rm -f "$WP/.claude/"handoff*.md
 se_in logout | bash "$STUB"
-[ ! -f "$WP/.claude/handoff.md" ] && ok "reason=logout では生成しない(clear 限定)" || ng "clear 以外で生成された"
+[ ! -f "$SF" ] && ok "reason=logout では生成しない(clear 限定)" || ng "clear 以外で生成された"
 # .claude ディレクトリの無いプロジェクトを汚染しない
 WNP="$SB/noclaude"; mkdir -p "$WNP"
 printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_path":"%s"}' "$WNP" "$TRS" | bash "$STUB"
 [ ! -e "$WNP/.claude" ] && ok ".claude の無いディレクトリには何も作らない" || ng "無関係ディレクトリを汚染"
 # 無効化フラグ
 se_in clear | CLAUDE_HANDOFF_AUTOSTUB=0 bash "$STUB"
-[ ! -f "$WP/.claude/handoff.md" ] && ok "CLAUDE_HANDOFF_AUTOSTUB=0 で無効化" || ng "無効化が効かない"
+[ ! -f "$SF" ] && ok "CLAUDE_HANDOFF_AUTOSTUB=0 で無効化" || ng "無効化が効かない"
 HOFF="$ROOT/home/skills/handoff/SKILL.md"
 [ -f "$HOFF" ] && grep -q '^name: handoff$' "$HOFF" && ok "/handoff スキル(半自動・モデル品質の引き継ぎ)が存在" || ng "/handoff スキル不備"
 grep -q '40行以内' "$HOFF" && ok "handoff スキルにサイズ上限(40行)を明記" || ng "サイズ上限なし"
@@ -512,6 +532,53 @@ tok2=$(bash "$EST" "$ROOT/home/CLAUDE.md" | awk 'NR==2{print $4}')
 grep -q '双方向' "$ROOT/docs/cost-optimization.md" && ok "docs にモデル規範が双方向である旨を記載" || ng "docs に双方向の記載がない"
 grep -q 'launch-effort pin' "$ROOT/docs/cost-optimization.md" && ok "docs が effort 固定(変更不可)ケースに言及" || ng "effort 固定への言及がない"
 grep -q 'セッション一度きり' "$ROOT/home/CLAUDE.md" && ok "CLAUDE.md の下位提案がナグ防止(一度きり)に制約" || ng "ナグ防止の制約がない"
+
+echo "== 24. 1日合計コスト(セッション横断・/clear でズレない) =="
+today=$(date +%Y%m%d); ddir="$CLAUDE_CONFIG_DIR/cost-daily"
+au_() { printf '{"type":"assistant","message":{"id":"m%s","model":"claude-sonnet-5","usage":{"input_tokens":%s,"cache_creation_input_tokens":0,"cache_read_input_tokens":0,"output_tokens":%s}}}\n' "$1" "$2" "$3"; }
+dsum() { cat "$ddir/${today}-"*.sum 2>/dev/null | awk '{s+=$1}END{printf "%.2f",s+0}'; }
+rm -f "$ddir/${today}-"*.sum "$ddir/session-"*.base 2>/dev/null
+TDA="$SB/dayA.jsonl"; { user_line 1; au_ 1 100000 100000; } > "$TDA"   # sonnet: 100k*3+100k*15=1.80
+guard_in PreToolUse dcsA Read x "$TDA" | bash "$GUARD" >/dev/null 2>&1
+{ user_line 2; au_ 2 100000 100000; } >> "$TDA"
+guard_in PreToolUse dcsA Read x "$TDA" | bash "$GUARD" >/dev/null 2>&1
+[ "$(dsum)" = "3.60" ] && ok "単一セッションの当日コストを正しく積む(3.60)" || ng "日次積算が不正: $(dsum)(期待3.60)"
+TDB="$SB/dayB.jsonl"; { user_line 1; au_ 1 100000 0; } > "$TDB"   # 0.30
+guard_in PreToolUse dcsB Read x "$TDB" | bash "$GUARD" >/dev/null 2>&1
+[ "$(dsum)" = "3.90" ] && ok "別セッションの寄与を二重計上せず合算(3.90)" || ng "セッション横断合算が不正: $(dsum)(期待3.90)"
+user_line 9 > "$TDA"   # /clear(トランスクリプト縮小)
+guard_in PreToolUse dcsA Read x "$TDA" | bash "$GUARD" >/dev/null 2>&1
+[ "$(dsum)" = "3.90" ] && ok "/clear で日次合計が減らない(過去分を保持)" || ng "/clear で日次が減った: $(dsum)"
+au_ 9 100000 0 >> "$TDA"   # /clear 後に 0.30 積み増し
+guard_in PreToolUse dcsA Read x "$TDA" | bash "$GUARD" >/dev/null 2>&1
+[ "$(dsum)" = "4.20" ] && ok "/clear 後の積み増しも取りこぼさず加算(4.20)" || ng "/clear後の積み増しが欠落: $(dsum)(期待4.20)"
+# 別日のベースライン(日跨ぎ)は過去分を当日へ持ち込まない
+rm -f "$ddir/${today}-"*.sum 2>/dev/null; printf '99.0 20200101\n' > "$ddir/session-dcsC.base"
+TDC="$SB/dayC.jsonl"; { user_line 1; au_ 1 100000 0; } > "$TDC"
+guard_in PreToolUse dcsC Read x "$TDC" | bash "$GUARD" >/dev/null 2>&1
+[ "$(dsum)" = "0.00" ] && ok "日跨ぎは前日累積を当日へ持ち込まない(0.00)" || ng "日跨ぎで過去分が混入: $(dsum)"
+# statusline が 📅 で日次合計を表示
+rm -f "$ddir/${today}-"*.sum; printf '2.500000\n' > "$ddir/${today}-slsess.sum"
+slday=$(printf '{"model":{"display_name":"S"},"session_id":"slsess","transcript_path":""}' | CLAUDE_STATUSLINE_DAILY=1 bash "$STATUS" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
+case "$slday" in *"📅 \$2.50"*) ok "statusline が 1日合計(📅)を表示";; *) ng "日次表示なし: [$slday]";; esac
+
+echo "== 25. セッションコストの /clear リセット + handoff 衝突回避 =="
+# /clear(トランスクリプト縮小=state offset > 現ファイルサイズ)でバーのコストが 0 に戻る
+CLR="$SB/clr.jsonl"; { user_line 1; usage_line 1 claude-sonnet-5 100000 0 0 100000; } > "$CLR"  # $1.80
+guard_in PreToolUse clrs Read x "$CLR" | bash "$GUARD" >/dev/null 2>&1
+before=$(printf '{"model":{"display_name":"S"},"session_id":"clrs","transcript_path":"%s"}' "$CLR" | bash "$STATUS" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
+case "$before" in *'$1.80/$5'*) ok 'セッションコストをガード推定で表示(/clear前 $1.80)';; *) ng "コスト表示不正: [$before]";; esac
+user_line 9 > "$CLR"   # /clear 相当でトランスクリプト縮小(state はまだ更新前=陳腐化)
+after=$(printf '{"model":{"display_name":"S"},"session_id":"clrs","transcript_path":"%s"}' "$CLR" | bash "$STATUS" 2>/dev/null | sed 's/\x1b\[[0-9;]*m//g')
+case "$after" in *'$0.00/$5'*) ok "/clear(トランスクリプト縮小)でコストが即 0 にリセット";; *) ng "/clear でコストが0に戻らない: [$after]";; esac
+# handoff 衝突回避: 2セッションの /clear が別ファイルになり、notice は最新を注入
+HP="$SB/hcproj"; mkdir -p "$HP/.claude"; HTR="$SB/hc.jsonl"; user_line 1 > "$HTR"
+printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_path":"%s","session_id":"AAAAAAAA1111"}' "$HP" "$HTR" | bash "$STUB"
+printf '{"hook_event_name":"SessionEnd","reason":"clear","cwd":"%s","transcript_path":"%s","session_id":"BBBBBBBB2222"}' "$HP" "$HTR" | bash "$STUB"
+n1=$(ls "$HP/.claude/"handoff-*.md 2>/dev/null | wc -l | tr -d ' ')
+[ "$n1" = "2" ] && ok "並行セッションの handoff が別ファイルで共存(衝突しない)" || ng "handoff ファイル数が想定外: $n1"
+nout=$(printf '{"cwd":"%s"}' "$HP" | bash "$NOTICE")
+case "$nout" in *"handoff-BBBBBBBB"*) ok "notice は最新の handoff(セッションB)を注入";; *) ng "最新 handoff を選べていない";; esac
 
 echo ""
 echo "結果: PASS=$PASS FAIL=$FAIL"

@@ -19,6 +19,8 @@ input=$(cat 2>/dev/null || true)
 
 # 古い警告マーカーの掃除(2日以上前のもの)
 find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'claude-budget-*' -mtime +2 -delete 2>/dev/null || true
+# 1日合計コストの古いファイル(当日以外)も掃除。2日超の寄与ファイルとベースラインを削除
+find "${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cost-daily" -maxdepth 1 -type f -mtime +2 -delete 2>/dev/null || true
 
 # 仕様ドリフト検知③: Claude Code 本体の更新を検知したら再監査を促す
 # (実行ファイルのフィンガープリント比較。stat のみ、コストゼロ)
@@ -45,15 +47,24 @@ if command -v jq >/dev/null 2>&1 && [ -n "$input" ]; then
 fi
 [ -n "$cwd" ] || cwd="$PWD"
 
-# handoff の探索: cwd → git ルート(サブディレクトリからの起動でも迷子にならない)
-handoff="$cwd/.claude/handoff.md"
-if [ ! -f "$handoff" ] && command -v git >/dev/null 2>&1; then
+# handoff の探索: cwd → git ルート(サブディレクトリからの起動でも迷子にならない)。
+# 共有の handoff.md と、セッション別スタブ handoff-*.md のうち **最新** を選ぶ
+# (複数セッションが並行してもバトンが衝突・消失しない)。
+# newest_handoff <dir> : そのディレクトリ内の handoff*.md で最新の1つを返す(なければ空)
+newest_handoff() {
+  local d="$1"
+  [ -d "$d" ] || return 0
+  # mtime 降順で先頭。ls -t は handoff.md と handoff-*.md を一緒に並べる
+  ls -t "$d"/handoff.md "$d"/handoff-*.md 2>/dev/null | head -1
+}
+handoff=$(newest_handoff "$cwd/.claude")
+if [ -z "$handoff" ] && command -v git >/dev/null 2>&1; then
   root=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null || true)
-  if [ -n "$root" ] && [ "$root" != "$cwd" ] && [ -f "$root/.claude/handoff.md" ]; then
-    handoff="$root/.claude/handoff.md"
+  if [ -n "$root" ] && [ "$root" != "$cwd" ]; then
+    handoff=$(newest_handoff "$root/.claude")
   fi
 fi
-[ -f "$handoff" ] || exit 0
+[ -n "$handoff" ] && [ -f "$handoff" ] || exit 0
 
 # 48時間より古いメモは案内しない(陳腐化したメモの誤再開を防ぐ)
 if ! find "$handoff" -mtime -2 2>/dev/null | grep -q .; then

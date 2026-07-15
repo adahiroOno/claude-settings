@@ -7,11 +7,13 @@
 #     🤖 モデル │ ⚡ effort │ 🧠/🔴 ctxバー(現在/閾値 [██░░] %)│
 #     💾 キャッシュ読出率 │ 📊 レート制限(サブスク時)│ ✍️ 出力スタイル │ 💭 thinking
 #   2行目(コスト・進捗):
-#     💰/⚠️/🛑 予算バー($cost/$上限 [██░░] %)│ 🎯/🔥 10T換算ペース │
-#     🔄 ターン(上限設定時は 現在/上限)│ 📝 変更行 │ 🎫 トークン内訳(opt-in)
+#     💰/⚠️/🛑 予算バー(セッション。/clear でリセット)│ 📅 1日合計(セッション横断)│
+#     🎯/🔥 10T換算ペース │ 🔄 ターン(上限設定時は 現在/上限)│ 📝 変更行 │ 🎫 トークン内訳
 #
-# トークン情報は公式 context_window.current_usage を使用(自作トランスクリプト解析は不要)。
-# ターン数のみ予算ガードの状態ファイル(なければ軽量なトランスクリプト集計)から取得。
+# トークン情報は公式 context_window.current_usage を使用。セッションコストとターン数は
+# 予算ガードの推定(状態ファイル)を使う — /clear でトランスクリプトがリセットされると
+# 自動で 0 に戻り、予算ブロックの判定とも一致する(公式 total_cost_usd は /clear で戻らない)。
+# 1日合計は cost-daily/ の当日寄与を合算(セッションを切ってもズレない)。
 set -u
 export LC_NUMERIC=C   # 小数点カンマのロケールで printf '%.2f' が壊れるのを防ぐ
 input=$(cat)
@@ -37,7 +39,6 @@ make_bar() {
 }
 
 model=$(get '.model.display_name'); [ -n "$model" ] || model=$(get '.model.id'); [ -n "$model" ] || model='?'
-cost=$(get '.cost.total_cost_usd')
 added=$(get '.cost.total_lines_added'); removed=$(get '.cost.total_lines_removed')
 transcript=$(get '.transcript_path'); session=$(get '.session_id')
 style=$(get '.output_style.name'); over200k=$(get '.exceeds_200k_tokens')
@@ -54,14 +55,39 @@ for v in cu_in cu_rd cu_wr cu_out; do eval "[[ \"\${$v:-}\" =~ ^[0-9]+$ ]] || $v
 ctx=$(( cu_in + cu_rd + cu_wr ))
 if [ "$ctx" -gt 0 ]; then cachepct=$(( cu_rd * 100 / ctx )); else cachepct=-1; fi
 
-# ターン数(ペース算出用): 予算ガードの状態ファイル → なければトランスクリプト
-turns=""
+# セッションコスト(予算バー用)とターン数: 予算ガードの状態ファイルから取得する。
+# コストを公式 cost.total_cost_usd ではなくガードの推定値にする理由:
+#   ① /clear でトランスクリプトがリセットされると自動的に 0 に戻る(公式値はプロセス
+#      通算で /clear で戻らない — ユーザー報告の「/clear でコストが 0 に戻らない」の原因)。
+#   ② 予算ブロックの判定もこの推定値なので、バーとブロック閾値が一致する。
+# 状態ファイル形式: "offset raw turns ctx"。cost=raw/1e6。offset > 現在のトランスクリプト
+# サイズなら /clear 直後で状態が陳腐化しているとみなしコスト 0 扱い(即座にリセット表示)。
+turns=""; cost=""
 state="${TMPDIR:-/tmp}/claude-budget-state-${session}"
 if [ -n "$session" ] && [ -f "$state" ]; then
-  turns=$(awk '{print $3}' "$state" 2>/dev/null || true); [[ "${turns:-}" =~ ^[0-9]+$ ]] || turns=""
+  read -r st_off st_raw st_turns _st_ctx < "$state" 2>/dev/null || true
+  [[ "${st_turns:-}" =~ ^[0-9]+$ ]] && turns="$st_turns"
+  if [[ "${st_raw:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]] && [[ "${st_off:-}" =~ ^[0-9]+$ ]]; then
+    tsize=0; [ -n "$transcript" ] && [ -f "$transcript" ] && tsize=$(wc -c < "$transcript" 2>/dev/null || echo 0)
+    if [ "$st_off" -le "$tsize" ]; then
+      cost=$(awk -v r="$st_raw" 'BEGIN{printf "%.6f", r/1000000}')
+    else
+      cost=0   # トランスクリプト縮小(/clear)を検知 → リセット待ち。0 表示
+    fi
+  fi
 fi
+# 状態ファイルが無い(新規/idle)場合はコスト未確定として空にする(予算バーを出さない)。
+# 公式通算値にはフォールバックしない(/clear で戻らずリセット要件を壊すため)。
 if [ -z "$turns" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c < "$transcript")" -le 2000000 ]; then
   turns=$(jq -Rn '[inputs|fromjson? // empty|select(.type=="user")|select(.isMeta!=true)|select(.isSidechain!=true)|select(.isCompactSummary!=true)|select(.toolUseResult==null)|(.message.content // empty)|if type=="string" then (if test("^<command-|^<local-command|^This session is being continued") then empty else 1 end) elif type=="array" then (if any(.[]?;(.type? // "")=="tool_result") then empty else 1 end) else empty end]|length' "$transcript" 2>/dev/null) || turns=""
+fi
+
+# 1日の合計コスト(当日の全セッション寄与の総和。ガードが cost-daily/ に積む。
+# セッションを切っても・/clear しても二重計上や取りこぼしでズレない設計)
+daily=""
+ddir="${CLAUDE_CONFIG_DIR:-$HOME/.claude}/cost-daily"
+if [ -d "$ddir" ]; then
+  daily=$(cat "$ddir/$(date +%Y%m%d)-"*.sum 2>/dev/null | awk '{s+=$1} END{printf "%.2f", s+0}')
 fi
 
 # 各セグメントに「行グループ」を付けて格納する。
@@ -77,11 +103,17 @@ add 1 "${C_MODEL}🤖 ${model}${R}"
 # effort(モデルが対応する場合のみ)
 [ -n "$effort" ] && [ "$effort" != "null" ] && add 1 "${C_EFF}⚡ ${effort}${R}"
 
-# 予算バー
+# 予算バー(セッション。/clear でリセット)
 if [ -n "$cost" ]; then
   bpct=$(awk -v c="$cost" -v b="$BUDGET" 'BEGIN{ if(b<=0){print 0}else{printf "%d", c/b*100} }')
   emo="💰"; [ "$bpct" -ge 100 ] && emo="🛑"; [ "$bpct" -ge 80 ] && [ "$bpct" -lt 100 ] && emo="⚠️"
   add 2 "${emo} \$$(printf '%.2f' "$cost")/\$${BUDGET} $(make_bar "$bpct" 10) ${bpct}%"
+fi
+
+# 1日の合計コスト(セッション横断・永続。0 のときは出さない。
+# CLAUDE_STATUSLINE_DAILY=0 で非表示)
+if [ "${CLAUDE_STATUSLINE_DAILY:-1}" = "1" ] && [ -n "$daily" ] && awk -v d="$daily" 'BEGIN{exit !(d + 0 > 0)}'; then
+  add 2 "${C_DIM}📅 \$${daily}${R}"
 fi
 
 # ctxバー(現在コンテキスト / 肥大ガード閾値)

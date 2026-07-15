@@ -126,15 +126,29 @@ elif command -v jq >/dev/null 2>&1; then
       backup_old_settings
       mv "$tmp" "$SETTINGS"
       echo ""
-      echo "settings.json を保持マージしました:"
-      echo "  - 既存の env・認証設定・独自キーは維持"
-      echo "  - model / alwaysThinkingEnabled / statusLine はテンプレートの推奨値を適用"
-      echo "  - permissions.allow / deny と hooks は新旧の和集合(既存フックは保持)"
-      old_model=$(printf '%s' "$OLD_JSON" | jq -r '.model // empty')
-      new_model=$(jq -r '.model // empty' "$SETTINGS")
-      if [ -n "$old_model" ] && [ "$old_model" != "$new_model" ]; then
-        echo "  ⚠ model: \"$old_model\" → \"$new_model\" に変更しました(コスト最適化のため)。"
-        echo "    戻す場合は ~/.claude/settings.json の model を編集してください。"
+      echo "settings.json を保持マージしました(項目単位):"
+      echo "  - あなた独自の env・認証・キー、独自 permissions/hooks は維持"
+      echo "  - permissions.allow / deny・hooks は新旧の和集合(既存フックは保持)"
+      # 項目ごとの diff: 既存値がテンプレ推奨値で“上書き/解除”されたキー(=コンフリクト)を
+      # old → new で1件ずつ明示する。permissions/hooks は上の和集合扱いなので除外。
+      # 新規追加キー(既存に無かったもの)は上書きではないため件数のみ要約する。
+      kdiff=$(jq -rn --argjson o "$OLD_JSON" --slurpfile bb "$SETTINGS" '
+        $bb[0] as $n |
+        def leaves(x): [ x | paths(scalars) | select(.[0] != "permissions" and .[0] != "hooks") ];
+        ((leaves($o) + leaves($n)) | unique) as $ps |
+        reduce $ps[] as $p ({changed:[], added:0};
+          ($o | getpath($p)) as $ov | ($n | getpath($p)) as $nv |
+          if $ov == $nv then .
+          elif $ov == null then .added += 1
+          else .changed += ["    ~ \($p | join(".")): \($ov|tojson) → \(if $nv==null then "(解除)" else ($nv|tojson) end)"]
+          end)
+        | (if (.changed | length) > 0 then (.changed | join("\n")) else "" end) as $c
+        | $c + (if .added > 0 then (if $c == "" then "" else "\n" end) + "    + テンプレート項目を \(.added) 件 新規追加(上書きではない)" else "" end)
+      ' 2>/dev/null || true)
+      if [ -n "$kdiff" ]; then
+        echo "  既存値を変更/解除した項目(既存 → 適用後):"
+        printf '%s\n' "$kdiff"
+        echo "  ※ 意図して維持したい値(予算 env・thinking・model 等)があれば、その項目を settings.json で再編集してください(次回以降は変更なしとして維持されます)。"
       fi
       # 旧テンプレートが配布していた廃止 env 変数の残存を通知(保持マージでは消えないため)
       if jq -e '.env | has("DISABLE_NON_ESSENTIAL_MODEL_CALLS")' "$SETTINGS" >/dev/null 2>&1; then

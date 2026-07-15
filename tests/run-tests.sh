@@ -277,6 +277,16 @@ o6=$(CLAUDE_CONFIG_DIR="$DID" bash "$INSTALL" 2>&1)
 nz=$(jq -r '.env.NEW' "$DID/settings.json")
 [ "$nz" = "z" ] && ok "差分あり: 既存の新規 env を保持してマージ" || ng "差分マージで env 喪失"
 case "$o6" in *"保持マージしました"*) ok "差分あり時は従来どおりマージメッセージを表示";; *) ng "差分ありでマージされない: [$o6]";; esac
+# 項目ごとの diff: 既存値がテンプレ推奨値で上書きされたキーを old→new で1件ずつ明示する
+DKV="$SB/keydiff"; mkdir -p "$DKV"
+printf '{"model":"opus","alwaysThinkingEnabled":true,"env":{"CLAUDE_SESSION_BUDGET_USD":"20","MY_OWN":"keep"}}' > "$DKV/settings.json"
+o7=$(CLAUDE_CONFIG_DIR="$DKV" bash "$INSTALL" 2>&1)
+case "$o7" in *'~ model: "opus" → "sonnet"'*) ok "項目diff: model の上書きを old→new で明示";; *) ng "model の項目diffが出ない: [$o7]";; esac
+case "$o7" in *'~ env.CLAUDE_SESSION_BUDGET_USD: "20" → "5"'*) ok "項目diff: コスト関連 env の上書きを明示(黙って消えない)";; *) ng "env budget の項目diffが出ない: [$o7]";; esac
+case "$o7" in *"alwaysThinkingEnabled: true → false"*) ok "項目diff: thinking の上書きを明示";; *) ng "thinking の項目diffが出ない: [$o7]";; esac
+case "$o7" in *"件 新規追加"*) ok "項目diff: 新規追加キーは件数で要約(上書きと区別)";; *) ng "追加の要約が出ない: [$o7]";; esac
+mo=$(jq -r '.env.MY_OWN' "$DKV/settings.json"); [ "$mo" = "keep" ] && ok "独自 env(MY_OWN)は維持され diff にも出ない" || ng "独自 env が失われた"
+case "$o7" in *"MY_OWN"*) ng "維持された独自キーが誤って diff に出た";; *) ok "維持キーは項目diff に出さない(変更点だけ表示)";; esac
 
 echo "== 9. トークン見積り(日本語) =="
 printf 'これは日本語のテストです。' > "$SB/jp.txt"

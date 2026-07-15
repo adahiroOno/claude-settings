@@ -75,6 +75,48 @@ if [ -n "$OLD_JSON" ]; then
         echo "  ⚠ env.DISABLE_NON_ESSENTIAL_MODEL_CALLS は公式ドキュメントから削除された変数です。"
         echo "    現行の代替は CLAUDE_CODE_DISABLE_TERMINAL_TITLE=1(適用済み)。旧変数は手動で削除して構いません。"
       fi
+
+      # ---- コスト影響設定の相違レビュー(テンプレートが既定に委ねるキー)-------------
+      # model/alwaysThinkingEnabled/budgets 等はテンプレートが推奨値で明示上書きする(上記)。
+      # 一方 outputStyle のように「テンプレートがあえて Claude 標準に委ねる」コスト影響キーは、
+      # 保持マージだと上書き対象が無いため既存の非既定値が“黙って”残る。黙認せず相違を明示し、
+      # どちらを優先するか解決する:
+      #   - CLAUDE_INSTALL_PREFER=keep|template が指定されていればそれに従う(自動化・Claude 実行時)
+      #   - 未指定で TTY があれば対話質問(bash ネイティブの「どちらを優先?」)
+      #   - 未指定で非対話なら既定 keep(破壊しない)+ 見直し方法を明示
+      pref_env="${CLAUDE_INSTALL_PREFER:-}"
+      case "$pref_env" in
+        keep|template|"") : ;;
+        *) echo "  (CLAUDE_INSTALL_PREFER=\"$pref_env\" は不正。keep として扱います)"; pref_env=keep ;;
+      esac
+      old_ostyle=$(printf '%s' "$OLD_JSON" | jq -r '.outputStyle // empty')
+      if [ -n "$old_ostyle" ] && [ "$old_ostyle" != "default" ]; then
+        pref="$pref_env"
+        if [ -z "$pref" ]; then
+          if [ -t 0 ]; then
+            printf '  コスト影響設定の相違: outputStyle="%s"(既存)\n' "$old_ostyle" >&2
+            printf '    冗長系スタイル(Explanatory/Learning 等)は出力トークンが増えます。意図した設定か確認を。\n' >&2
+            printf '    [t] 標準スタイルに戻す(節約) / [k] 既存を維持 > ' >&2
+            read -r ans || ans=k
+            case "$ans" in t|T|template) pref=template ;; *) pref=keep ;; esac
+          else
+            pref=keep
+          fi
+        fi
+        if [ "$pref" = "template" ]; then
+          t2=$(mktemp)
+          if jq 'del(.outputStyle)' "$SETTINGS" > "$t2" 2>/dev/null && jq -e . "$t2" >/dev/null 2>&1; then
+            mv "$t2" "$SETTINGS"
+            echo "  ✎ outputStyle: \"$old_ostyle\" を解除し標準スタイルに戻しました(出力トークン節約)。"
+          else
+            rm -f "$t2"
+            echo "  ⚠ outputStyle の解除に失敗。既存値 \"$old_ostyle\" を維持します。"
+          fi
+        else
+          echo "  ⚠ outputStyle: \"$old_ostyle\" を維持しました。冗長スタイルなら出力トークンが増えます —"
+          echo "    /config か settings.json で見直せます(CLAUDE_INSTALL_PREFER=template で標準へ自動リセット)。"
+        fi
+      fi
     else
       rm -f "$tmp"
       echo "⚠ マージに失敗したためテンプレートをそのまま配置しました。"

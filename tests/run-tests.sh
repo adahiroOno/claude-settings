@@ -231,6 +231,33 @@ nh=$(jq -r '.hooks.Notification[0].hooks[0].command' "$D/settings.json")
 k=$(jq -r '.apiKeyHelper' "$D/settings.json"); [ "$k" = "/bin/k.sh" ] && ok "独自キーを保持" || ng "独自キー喪失"
 d=$(jq -r '.permissions.deny | index("Read(./mine/**)")' "$D/settings.json"); [ "$d" != "null" ] && ok "deny を和集合" || ng "deny 喪失"
 
+# コスト影響設定(outputStyle)の相違レビュー: テンプレートが既定に委ねるキーは黙認しない。
+# 既存に非既定 outputStyle を持つ設定を用意し、3つの解決方針を検証する。
+mkstyle() { # dest-dir value
+  mkdir -p "$1"
+  printf '{"model":"opus","outputStyle":"%s","env":{"E":"1"}}' "$2" > "$1/settings.json"
+}
+# (a) 非対話・PREFER 未指定 → 既定 keep(破壊しない)+ 警告を明示表示
+DO1="$SB/ostyle1"; mkstyle "$DO1" "Explanatory"
+o1=$(CLAUDE_CONFIG_DIR="$DO1" bash "$INSTALL" < /dev/null 2>&1)
+os1=$(jq -r '.outputStyle // "ABSENT"' "$DO1/settings.json")
+[ "$os1" = "Explanatory" ] && ok "outputStyle: 非対話既定は既存を維持(破壊しない)" || ng "既定で outputStyle が失われた: $os1"
+case "$o1" in *"outputStyle"*"維持"*) ok "維持時は黙認せず警告を表示(見直し方法つき)";; *) ng "維持の警告が出ていない";; esac
+# (b) CLAUDE_INSTALL_PREFER=template → 標準スタイルへリセット(キー削除)
+DO2="$SB/ostyle2"; mkstyle "$DO2" "Explanatory"
+CLAUDE_INSTALL_PREFER=template CLAUDE_CONFIG_DIR="$DO2" bash "$INSTALL" >/dev/null 2>&1
+os2=$(jq -r '.outputStyle // "ABSENT"' "$DO2/settings.json")
+[ "$os2" = "ABSENT" ] && ok "PREFER=template で outputStyle を標準へリセット" || ng "template 指定でリセットされない: $os2"
+# (c) CLAUDE_INSTALL_PREFER=keep → 明示的に既存を維持
+DO3="$SB/ostyle3"; mkstyle "$DO3" "Learning"
+CLAUDE_INSTALL_PREFER=keep CLAUDE_CONFIG_DIR="$DO3" bash "$INSTALL" >/dev/null 2>&1
+os3=$(jq -r '.outputStyle // "ABSENT"' "$DO3/settings.json")
+[ "$os3" = "Learning" ] && ok "PREFER=keep で既存 outputStyle を維持" || ng "keep 指定で維持されない: $os3"
+# 既定(default)スタイルは相違なし扱い → レビュー対象外(ノイズを出さない)
+DO4="$SB/ostyle4"; mkstyle "$DO4" "default"
+o4=$(CLAUDE_CONFIG_DIR="$DO4" bash "$INSTALL" < /dev/null 2>&1)
+case "$o4" in *"outputStyle"*) ng "既定スタイルなのにレビュー行が出た";; *) ok "既定スタイルはレビュー対象外(不要な警告なし)";; esac
+
 echo "== 9. トークン見積り(日本語) =="
 printf 'これは日本語のテストです。' > "$SB/jp.txt"
 mb=$(bash "$EST" "$SB/jp.txt" | awk 'NR==2{print $3}')

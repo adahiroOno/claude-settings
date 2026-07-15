@@ -98,7 +98,8 @@ bash scripts/install.sh
 
 1. `install.sh` が `home/` の内容を `~/.claude/` に導入します(既存ファイルは `~/.claude/backup-<日時>/` に退避)。
 2. 既存の `settings.json` がある場合は**保持マージ**します — あなたの環境固有の設定(`env` の各種変数、認証まわり、permissions、hooks)はそのまま残し、本テンプレートの推奨値を上書き・追加します。
-3. Claude Code を起動し、`/cost-audit` を実行して現状の監査レポートを確認します。
+3. **コスト影響設定の相違レビュー**: `outputStyle` のように「テンプレートが Claude 標準に委ねる」コスト影響キーは、保持マージだと上書き対象が無く既存の非既定値が黙って残ります。これを黙認せず、どちらを優先するか解決します — TTY があれば対話質問、`CLAUDE_INSTALL_PREFER=keep|template` を指定すればそれに従い(自動化・Claude 実行時)、いずれも結果を明示表示します(既定は破壊しない `keep` + 見直し方法の案内)。
+4. Claude Code を起動し、`/cost-audit` を実行して現状の監査レポートを確認します。
 
 各プロジェクトには `project-template/` の内容を `.claude/` にコピーし、プロジェクトに合わせて調整します。
 

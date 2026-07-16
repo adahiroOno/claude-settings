@@ -21,6 +21,37 @@ if [ -f "$DST/settings.json" ]; then
   OLD_JSON="$(cat "$DST/settings.json")"
 fi
 
+# ---- プラン(dry-run)モード ---------------------------------------------------
+# 変更を一切行わず、settings.json の項目単位の分析だけを JSON で標準出力する:
+#   conflicts: 既存とテンプレで値が食い違うキー(= 都度確認が必要)
+#   additions: テンプレのみが持つキー(= 追加してよい。permissions/hooks を除く)
+#   same:      既存とテンプレで同値のキー(= スキップ)
+# Claude(/settings-merge スキル)がこれを読み、conflicts を AskUserQuestion で
+# 都度確認したうえで、決定を CLAUDE_INSTALL_DECISIONS 経由で適用する。
+# permissions/hooks は常に和集合(コンフリクトなし)なので分析対象外。
+if [ "${CLAUDE_INSTALL_PLAN:-0}" = "1" ]; then
+  command -v jq >/dev/null 2>&1 || { echo '{"error":"jq_required"}'; exit 0; }
+  TPL="$SRC/settings.json"
+  if [ -z "$OLD_JSON" ]; then
+    jq -n --slurpfile t "$TPL" '{fresh:true, conflicts:[], additions:($t[0]|[paths(type!="object" and type!="array")|select(.[0]!="permissions" and .[0]!="hooks")|join(".")]), same:[]}'
+  else
+    printf '%s' "$OLD_JSON" | jq -s --slurpfile t "$TPL" '
+      .[0] as $o | $t[0] as $n |
+      def leaves(x): [ x | paths(type != "object" and type != "array") | select(.[0] != "permissions" and .[0] != "hooks") ];
+      ((leaves($o) + leaves($n)) | unique) as $ps |
+      reduce $ps[] as $p ({fresh:false, conflicts:[], additions:[], same:[]};
+        ($o | getpath($p)) as $ov | ($n | getpath($p)) as $nv | ($p | join(".")) as $k |
+        if   $nv == null then .                       # テンプレに無い(ユーザー独自)→ 触れない
+        elif $ov == null then .additions += [$k]      # テンプレのみ → 追加
+        elif $ov == $nv then .same += [$k]            # 同値 → スキップ
+        else .conflicts += [{key:$k, existing:$ov, template:$nv}]
+        end)
+    '
+  fi
+  exit 0
+fi
+# -----------------------------------------------------------------------------
+
 count=0; updated=0; skipped=0
 while IFS= read -r -d '' f; do
   rel="${f#"$SRC"/}"
@@ -127,6 +158,17 @@ elif command -v jq >/dev/null 2>&1; then
     ' > "$tmp" 2>/dev/null && jq -e . "$tmp" > /dev/null 2>&1; then
     # outputStyle レビュー(冗長系のみ)を最終形へ反映してから差分判定する。
     notes=$(review_outputstyle "$tmp")
+    # 決定オーバーレイ: /settings-merge スキルが AskUserQuestion で確定した値を
+    # CLAUDE_INSTALL_DECISIONS(JSON ファイル)で渡すと、それを最終形に上書き適用する。
+    # 例: {"model":"sonnet","outputStyle":"terse"}。競合の都度確認の結果をそのまま反映。
+    if [ -n "${CLAUDE_INSTALL_DECISIONS:-}" ] && [ -f "$CLAUDE_INSTALL_DECISIONS" ]; then
+      td=$(mktemp)
+      if jq -s '.[0] * .[1]' "$tmp" "$CLAUDE_INSTALL_DECISIONS" > "$td" 2>/dev/null && jq -e . "$td" >/dev/null 2>&1; then
+        mv "$td" "$tmp"
+      else
+        rm -f "$td"; echo "  ⚠ CLAUDE_INSTALL_DECISIONS の適用に失敗(不正な JSON?)。決定は無視しました。"
+      fi
+    fi
     if jq -S . "$tmp" 2>/dev/null | cmp -s - <(jq -S . "$SETTINGS" 2>/dev/null); then
       rm -f "$tmp"
       echo ""
@@ -147,7 +189,7 @@ elif command -v jq >/dev/null 2>&1; then
       #  template → old → new(適用)を明示。permissions/hooks は和集合扱いで除外。
       kdiff=$(jq -rn --argjson o "$OLD_JSON" --slurpfile bb "$SETTINGS" --slurpfile tt "$TPL" '
         $bb[0] as $final | $tt[0] as $tpl |
-        def leaves(x): [ x | paths(scalars) | select(.[0] != "permissions" and .[0] != "hooks") ];
+        def leaves(x): [ x | paths(type != "object" and type != "array") | select(.[0] != "permissions" and .[0] != "hooks") ];
         ((leaves($o) + leaves($tpl)) | unique) as $ps |
         reduce $ps[] as $p ({conflict:[], added:0};
           ($o | getpath($p)) as $ov | ($tpl | getpath($p)) as $tv | ($final | getpath($p)) as $fv |

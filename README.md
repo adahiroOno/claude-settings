@@ -73,8 +73,10 @@ claude-settings/
 │       │   └── scripts/export_thinking.sh    # thinkingの事後アーカイブ(モデル呼び出しなし)
 │       ├── refine/
 │       │   └── SKILL.md         # 曖昧な依頼を実行前に仕様へ整形(/refine で起動・手戻り防止)
-│       └── handoff/
-│           └── SKILL.md         # 引き継ぎメモをモデル品質で保存(/handoff で起動 → /clear)
+│       ├── handoff/
+│       │   └── SKILL.md         # 引き継ぎメモをモデル品質で保存(/handoff で起動 → /clear)
+│       └── settings-merge/
+│           └── SKILL.md         # settings.json を項目単位で対話マージ(競合を AskUserQuestion で都度確認・/settings-merge)
 ├── project-template/            # 各プロジェクトの .claude/ に置くテンプレート
 │   ├── settings.json
 │   ├── CLAUDE.md
@@ -100,6 +102,17 @@ bash scripts/install.sh
 2. 既存の `settings.json` がある場合は**保持マージ**します。**既定は「あなたの既存値を優先」** — テンプレートは“守り”(hooks・deny リスト・予算/上限 env・statusline)を追加し、あなたがまだ設定していないキーを補うだけで、あなたが明示した値(`model`・`outputStyle`・予算 env・認証など)は**勝手に書き換えません**。例えば、あなたが選んだ `model`(上位/最新モデル)や `outputStyle: terse`(簡潔=節約系)がインストールで下位・標準へ差し替えられることはありません。
 3. **推奨値との食い違いは明示**します(黙って上書きしない透明性): `model: 既存 "opus" を維持(テンプレ推奨: "sonnet")` のように、テンプレ推奨と異なる項目を1件ずつ表示。積極的にテンプレ推奨へ寄せたいときだけ `CLAUDE_INSTALL_PREFER=template` を付けて再実行すると、`model=sonnet` などコスト最適化寄りの値に切り替わります(`outputStyle` は `Explanatory`/`Learning` のような冗長系のみ標準へ戻し、`terse` 等は温存)。
 4. Claude Code を起動し、`/cost-audit` を実行して現状の監査レポートを確認します。
+
+### 対話マージ(競合を1項目ずつ確認したいとき): `/settings-merge`
+
+`install.sh` はシェルスクリプトなので `AskUserQuestion` を呼べません。**競合キーを1つずつ確認しながら決めたい**、あるいは **`outputStyle` を `terse` にするなど特定項目を選んで適用したい**ときは、Claude Code のセッションで `/settings-merge` を実行してください。Claude が仲介して次の流れで進めます:
+
+- **重複しない項目**(テンプレのみ)→ 追加(確認なし)
+- **同値の項目** → スキップ(確認なし)
+- **競合(値が違う)項目** → `AskUserQuestion` で「既存を維持 / テンプレ推奨を適用」を**都度確認**
+- **`outputStyle`** → コスト直結のため希望を確認(`terse` などの簡潔スタイルを選べる)
+
+内部的には、`CLAUDE_INSTALL_PLAN=1`(副作用なしの項目分析 JSON)で競合を洗い出し、あなたの回答を `CLAUDE_INSTALL_DECISIONS`(確定値の JSON)で適用します。この2つは自動化から直接使うこともできます。
 
 各プロジェクトには `project-template/` の内容を `.claude/` にコピーし、プロジェクトに合わせて調整します。
 

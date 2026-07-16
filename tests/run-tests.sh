@@ -307,6 +307,40 @@ mm=$(jq -r '.model' "$DKV/settings.json"); [ "$mm" = "opus" ] && ok "既存 mode
 case "$o7" in *"件 追加"*) ok "項目diff: 追加キーは件数で要約(維持と区別)";; *) ng "追加の要約が出ない: [$o7]";; esac
 mo=$(jq -r '.env.MY_OWN' "$DKV/settings.json"); [ "$mo" = "keep" ] && ok "独自 env(MY_OWN)は維持され diff にも出ない" || ng "独自 env が失われた"
 case "$o7" in *"MY_OWN"*) ng "維持された独自キーが誤って diff に出た";; *) ok "維持キーは項目diff に出さない(食い違いだけ表示)";; esac
+# プラン(dry-run)モード: 副作用なしで conflicts/additions/same を JSON 出力(/settings-merge の入力)
+DP="$SB/plan"; mkdir -p "$DP"
+printf '{"model":"opus","alwaysThinkingEnabled":false,"env":{"CLAUDE_SESSION_BUDGET_USD":"20","MINE":"x"}}' > "$DP/settings.json"
+pbefore=$(md5sum "$DP/settings.json" | awk '{print $1}')
+plan=$(CLAUDE_INSTALL_PLAN=1 CLAUDE_CONFIG_DIR="$DP" bash "$INSTALL" 2>/dev/null)
+pafter=$(md5sum "$DP/settings.json" | awk '{print $1}')
+echo "$plan" | jq -e . >/dev/null 2>&1 && ok "plan: 妥当な JSON を出力" || ng "plan JSON 不正: [$plan]"
+[ "$pbefore" = "$pafter" ] && ok "plan は副作用なし(settings.json 不変)" || ng "plan が settings を書き換えた"
+[ ! -d "$DP"/backup-* ] 2>/dev/null && ok "plan はバックアップも作らない" || ng "plan が backup を作った"
+ck=$(echo "$plan" | jq -r '[.conflicts[].key] | sort | join(",")')
+[ "$ck" = "env.CLAUDE_SESSION_BUDGET_USD,model" ] && ok "plan: 競合キー(model・予算 env)を正しく列挙" || ng "conflicts 不正: $ck"
+pce=$(echo "$plan" | jq -r '.conflicts[] | select(.key=="model") | "\(.existing)/\(.template)"')
+[ "$pce" = "opus/sonnet" ] && ok "plan: 競合の existing/template 値を提示" || ng "conflict 値不正: $pce"
+echo "$plan" | jq -e '.additions | index("statusLine.command")' >/dev/null 2>&1 && ok "plan: 追加候補(テンプレのみのキー)を列挙" || ng "additions に統計不足"
+echo "$plan" | jq -e '.same | index("alwaysThinkingEnabled")' >/dev/null 2>&1 && ok "plan: 同値キーを same に分類(スキップ対象)" || ng "same 分類が不正"
+# 決定オーバーレイ: AskUserQuestion の結果(例 outputStyle=terse)を確定適用できる
+DDEC="$SB/decide"; mkdir -p "$DDEC"
+printf '{"model":"opus","env":{"MINE":"x"}}' > "$DDEC/settings.json"
+echo '{"model":"sonnet","outputStyle":"terse"}' > "$SB/dec.json"
+CLAUDE_INSTALL_DECISIONS="$SB/dec.json" CLAUDE_CONFIG_DIR="$DDEC" bash "$INSTALL" </dev/null >/dev/null 2>&1
+dm=$(jq -r '.model' "$DDEC/settings.json"); [ "$dm" = "sonnet" ] && ok "decisions: 確定した model=sonnet を適用" || ng "decisions model 未適用: $dm"
+ds=$(jq -r '.outputStyle // "ABSENT"' "$DDEC/settings.json"); [ "$ds" = "terse" ] && ok "decisions: outputStyle=terse を適用(ユーザー希望どおり)" || ng "decisions outputStyle 未適用: $ds"
+dmine=$(jq -r '.env.MINE' "$DDEC/settings.json"); [ "$dmine" = "x" ] && ok "decisions 適用後も独自 env を維持" || ng "decisions で独自 env 喪失"
+# 決定に含めないキーは既定 keep のまま(既存維持)
+DDEC2="$SB/decide2"; mkdir -p "$DDEC2"
+printf '{"model":"opus","env":{"CLAUDE_SESSION_BUDGET_USD":"20"}}' > "$DDEC2/settings.json"
+echo '{"outputStyle":"terse"}' > "$SB/dec2.json"
+CLAUDE_INSTALL_DECISIONS="$SB/dec2.json" CLAUDE_CONFIG_DIR="$DDEC2" bash "$INSTALL" </dev/null >/dev/null 2>&1
+d2m=$(jq -r '.model' "$DDEC2/settings.json"); d2b=$(jq -r '.env.CLAUDE_SESSION_BUDGET_USD' "$DDEC2/settings.json")
+{ [ "$d2m" = "opus" ] && [ "$d2b" = "20" ]; } && ok "decisions に無いキー(model・予算)は既存維持(都度確認で「維持」を選んだ想定)" || ng "決定外キーが変わった: model=$d2m budget=$d2b"
+# /settings-merge スキルの存在と方針
+SMG="$ROOT/home/skills/settings-merge/SKILL.md"
+[ -f "$SMG" ] && grep -q '^name: settings-merge$' "$SMG" && ok "/settings-merge スキルが存在" || ng "/settings-merge スキル不備"
+grep -q 'AskUserQuestion' "$SMG" && grep -q 'CLAUDE_INSTALL_PLAN' "$SMG" && grep -q 'CLAUDE_INSTALL_DECISIONS' "$SMG" && ok "スキルが plan→AskUserQuestion→decisions の流れを規定" || ng "スキルの対話マージ手順が不備"
 
 echo "== 9. トークン見積り(日本語) =="
 printf 'これは日本語のテストです。' > "$SB/jp.txt"

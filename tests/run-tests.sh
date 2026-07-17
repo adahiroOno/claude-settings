@@ -423,6 +423,21 @@ printf '\n# e\n' >> "$DMAN2/statusline.sh"; CLAUDE_CONFIG_DIR="$DMAN2" bash "$IN
 mv "$DMAN2/statusline.sh.claude-settings-new" "$DMAN2/statusline.sh"
 CLAUDE_CONFIG_DIR="$DMAN2" bash "$INSTALL" </dev/null >/dev/null 2>&1
 [ -f "$DMAN2/statusline.sh.claude-settings-new" ] && ng ".new が掃除されない" || ok "manifest: 新版を受理後は .claude-settings-new を掃除"
+# ★回帰★ マニフェスト以前の導入(ファイルあり・差分あり・manifest 無し)で無言終了しない
+DPRE="$SB/premanifest"; mkdir -p "$DPRE/hooks"
+echo "# 旧版フック" > "$DPRE/hooks/handoff-notice.sh"; echo "旧statusline" > "$DPRE/statusline.sh"
+opre=$(CLAUDE_CONFIG_DIR="$DPRE" bash "$INSTALL" </dev/null 2>&1); rcpre=$?
+[ "$rcpre" = "0" ] && ok "pre-manifest 導入でも異常終了しない(exit 0)" || ng "★無言終了★ pre-manifest で exit $rcpre"
+case "$opre" in *"導入完了"*) ok "pre-manifest 導入でも出力が出る(サイレント化しない)" ;; *) ng "★出力なし★ pre-manifest 導入: [$opre]" ;; esac
+[ -f "$DPRE/.claude-settings-manifest" ] && ok "pre-manifest 導入で manifest を作成(以後は編集検知が有効)" || ng "manifest が作られない"
+# ★回帰★ 新規配置直後の再実行で settings.json が誤って再マージされない(配列順の揺れ対策)
+DIDEM="$SB/settings-idem"; mkdir -p "$DIDEM"
+CLAUDE_CONFIG_DIR="$DIDEM" bash "$INSTALL" </dev/null >/dev/null 2>&1     # 1回目=新規配置(テンプレの並び)
+nbi=$(ls -d "$DIDEM"/backup-* 2>/dev/null | wc -l | tr -d ' ')
+oidem=$(CLAUDE_CONFIG_DIR="$DIDEM" bash "$INSTALL" </dev/null 2>&1)       # 2回目=変更なしのはず
+nbi2=$(ls -d "$DIDEM"/backup-* 2>/dev/null | wc -l | tr -d ' ')
+case "$oidem" in *"settings.json: 変更なし"*) ok "新規配置→再実行で settings.json は変更なし(配列順で誤判定しない)" ;; *) ng "settings.json が誤って再マージ: [$oidem]" ;; esac
+[ "$nbi" = "$nbi2" ] && ok "新規配置→再実行で余計なバックアップを作らない" || ng "no-op で backup が増えた($nbi→$nbi2)"
 
 echo "== 9. トークン見積り(日本語) =="
 printf 'これは日本語のテストです。' > "$SB/jp.txt"

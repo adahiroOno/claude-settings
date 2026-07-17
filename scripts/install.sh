@@ -67,12 +67,21 @@ fi
 MANIFEST="$DST/.claude-settings-manifest"
 NEWMANIFEST="$(mktemp)"
 FORCE="${CLAUDE_INSTALL_FORCE:-0}"
+# マニフェストが元から在ったか(初回=ブートストラップ判定)。無い場合、既存の差分は
+# 「マニフェスト以前からの導入物」とみなして退避のうえ更新し、マニフェストを作る
+# (以後は編集検知で保護)。※ 過去は初回に lookup_hash が存在しないマニフェストへ
+#  awk して set -e で無言終了していた(= install が何も出力しない不具合)。ここで解消。
+MANIFEST_EXISTED=0; [ -f "$MANIFEST" ] && MANIFEST_EXISTED=1
 hashof() {
   if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1" | awk '{print $1}';
   elif command -v shasum >/dev/null 2>&1; then shasum -a 256 "$1" | awk '{print $1}';
   else cksum "$1" | awk '{print $1"-"$2}'; fi
 }
-lookup_hash() { awk -F'\t' -v p="$1" '$2==p{print $1; exit}' "$MANIFEST" 2>/dev/null; }
+# マニフェスト未作成でも失敗しない(空を返す)。set -e 下での無言終了を防ぐ。
+lookup_hash() {
+  [ -f "$MANIFEST" ] || return 0
+  awk -F'\t' -v p="$1" '$2==p{print $1; exit}' "$MANIFEST" 2>/dev/null || true
+}
 
 count=0; updated=0; skipped=0; preserved=0; preserved_list=""
 while IFS= read -r -d '' f; do
@@ -89,8 +98,8 @@ while IFS= read -r -d '' f; do
     rm -f "$dest.claude-settings-new"   # 追いついたので新版マーカーは掃除
   else
     desthash="$(hashof "$dest")"; rec="$(lookup_hash "$rel")"
-    if [ "$FORCE" = "1" ] || { [ -n "$rec" ] && [ "$rec" = "$desthash" ]; }; then
-      # あなたが編集していない(前回入れた版のまま)or 強制 → 安全に更新
+    if [ "$FORCE" = "1" ] || [ "$MANIFEST_EXISTED" = "0" ] || { [ -n "$rec" ] && [ "$rec" = "$desthash" ]; }; then
+      # 未編集(前回入れた版のまま)/ 初回ブートストラップ / 強制 → 退避して更新
       mkdir -p "$BK/$(dirname "$rel")"; cp -p "$dest" "$BK/$rel"
       cp -p "$f" "$dest"; updated=$((updated + 1))
       printf '%s\t%s\n' "$newhash" "$rel" >> "$NEWMANIFEST"
@@ -279,7 +288,11 @@ elif command -v jq >/dev/null 2>&1; then
         rm -f "$td"; echo "  ⚠ CLAUDE_INSTALL_DECISIONS の適用に失敗(不正な JSON?)。決定は無視しました。"
       fi
     fi
-    if jq -S . "$tmp" 2>/dev/null | cmp -s - <(jq -S . "$SETTINGS" 2>/dev/null); then
+    # 変更判定は配列順に依存しない正規形で比較する。uni()=unique が配列をソートするため、
+    # 新規配置直後(テンプレの並び)と2回目のマージ結果(ソート済み)が“同じ集合なのに順序
+    # 違い”で誤って「変更あり」判定され、無駄な再書き込み・退避が起きていた。これを解消。
+    canon() { jq -S 'def s: if type=="array" then map(s)|sort elif type=="object" then map_values(s) else . end; s' "$1" 2>/dev/null; }
+    if canon "$tmp" | cmp -s - <(canon "$SETTINGS"); then
       rm -f "$tmp"
       echo ""
       echo "settings.json: 変更なし(既に統合済み)。スキップしました。"

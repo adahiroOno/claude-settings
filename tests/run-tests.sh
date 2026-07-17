@@ -213,6 +213,15 @@ out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":0.08},
 case "$out" in *"🎫"*) ng "TOKENS=0 なのに内訳が表示: [$out]";; *) ok "CLAUDE_STATUSLINE_TOKENS=0 で非表示に切替可能";; esac
 out=$(printf '{"model":{"display_name":"Sonnet"}}' | bash "$STATUS" 2>&1 | strip)
 case "$out" in "🤖 Sonnet") ok "最小入力でも安全(エラーなし)";; *) ng "最小入力不正: [$out]";; esac
+# 起動直後(状態ファイル未生成・セッションあり)でもセッションコストを表示する。
+# ガードは初回プロンプト前は状態を作らないため、公式 total_cost_usd(なければ0)で補完。
+out=$(printf '{"model":{"display_name":"Sonnet"},"session_id":"sl-startup","transcript_path":"","cost":{"total_cost_usd":0.0}}' | bash "$STATUS" | strip)
+case "$out" in *'$0.00/$5'*) ok "起動直後(状態なし)でも予算バーを $0.00 で表示";; *) ng "起動時に予算バーが出ない: [$out]";; esac
+out=$(printf '{"model":{"display_name":"Opus"},"session_id":"sl-resume","transcript_path":"","cost":{"total_cost_usd":2.30}}' | bash "$STATUS" | strip)
+case "$out" in *'$2.30/$5'*) ok "resume 起動時は total_cost_usd を予算バーに反映";; *) ng "resume 起動時のコスト不正: [$out]";; esac
+# セッションが無い最小入力ではフォールバックしない(予算バーを出さない=従来どおり)
+out=$(printf '{"model":{"display_name":"Sonnet"},"cost":{"total_cost_usd":5.0}}' | bash "$STATUS" | strip)
+case "$out" in *'💰'*) ng "セッション無しでフォールバック表示された: [$out]";; *) ok "セッション無しはフォールバックしない(予算バー非表示)";; esac
 
 echo "== 8. install.sh 保持マージ =="
 D="$SB/claudehome"; mkdir -p "$D"

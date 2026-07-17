@@ -76,8 +76,17 @@ if [ -n "$session" ] && [ -f "$state" ]; then
     fi
   fi
 fi
-# 状態ファイルが無い(新規/idle)場合はコスト未確定として空にする(予算バーを出さない)。
-# 公式通算値にはフォールバックしない(/clear で戻らずリセット要件を壊すため)。
+# 起動直後のフォールバック: ガードは PreToolUse / UserPromptSubmit でしか状態ファイルを
+# 作らないため、最初のプロンプト前(セッション開始直後)は状態が無く、従来は予算バー等が
+# 出なかった。起動時からセッションコストを見せるため、状態が無い&セッションがあるときは
+# 公式 cost.total_cost_usd(なければ 0)で補う。
+# /clear では状態ファイルが残り offset > サイズで 0 表示になるので、このフォールバックは
+# 「状態がまだ無い起動直後」にしか効かず、/clear のリセット要件は壊さない。
+if [ -z "$cost" ] && [ -n "$session" ]; then
+  oc=$(get '.cost.total_cost_usd')
+  if [[ "${oc:-}" =~ ^[0-9]+(\.[0-9]+)?$ ]]; then cost="$oc"; else cost=0; fi
+fi
+# ターン数も状態が無ければトランスクリプトから数える(無ければ空のまま)。
 if [ -z "$turns" ] && [ -n "$transcript" ] && [ -f "$transcript" ] && [ "$(wc -c < "$transcript")" -le 2000000 ]; then
   turns=$(jq -Rn '[inputs|fromjson? // empty|select(.type=="user")|select(.isMeta!=true)|select(.isSidechain!=true)|select(.isCompactSummary!=true)|select(.toolUseResult==null)|(.message.content // empty)|if type=="string" then (if test("^<command-|^<local-command|^This session is being continued") then empty else 1 end) elif type=="array" then (if any(.[]?;(.type? // "")=="tool_result") then empty else 1 end) else empty end]|length' "$transcript" 2>/dev/null) || turns=""
 fi

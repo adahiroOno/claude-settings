@@ -341,6 +341,30 @@ d2m=$(jq -r '.model' "$DDEC2/settings.json"); d2b=$(jq -r '.env.CLAUDE_SESSION_B
 SMG="$ROOT/home/skills/settings-merge/SKILL.md"
 [ -f "$SMG" ] && grep -q '^name: settings-merge$' "$SMG" && ok "/settings-merge スキルが存在" || ng "/settings-merge スキル不備"
 grep -q 'AskUserQuestion' "$SMG" && grep -q 'CLAUDE_INSTALL_PLAN' "$SMG" && grep -q 'CLAUDE_INSTALL_DECISIONS' "$SMG" && ok "スキルが plan→AskUserQuestion→decisions の流れを規定" || ng "スキルの対話マージ手順が不備"
+# CLAUDE.md は丸ごと上書きしない(ユーザーのグローバルメモリ)。管理ブロック方式で更新する。
+# (1) ユーザー独自 CLAUDE.md は保持し、管理ブロックを末尾に追加(上書きしない)
+DCM="$SB/claudemd"; mkdir -p "$DCM"
+printf '# 自分ルール\n- 常にテストを書く\n- デプロイ前に確認\n' > "$DCM/CLAUDE.md"
+ocm=$(CLAUDE_CONFIG_DIR="$DCM" bash "$INSTALL" </dev/null 2>&1)
+grep -q "自分ルール" "$DCM/CLAUDE.md" && grep -q "常にテストを書く" "$DCM/CLAUDE.md" && ok "CLAUDE.md: ユーザー独自の記述を保持(丸ごと上書きしない)" || ng "CLAUDE.md のユーザー記述が失われた"
+grep -qF "claude-settings managed" "$DCM/CLAUDE.md" && ok "CLAUDE.md: コスト方針を管理ブロックとして追加" || ng "管理ブロックが追加されない"
+case "$ocm" in *"CLAUDE.md"*"末尾に追加"*) ok "CLAUDE.md: 上書きではなく追加した旨を通知" ;; *) ng "CLAUDE.md の通知が不正: [$ocm]" ;; esac
+# (2) 冪等: 2回目は変更なし
+ocm2=$(CLAUDE_CONFIG_DIR="$DCM" bash "$INSTALL" </dev/null 2>&1)
+case "$ocm2" in *"CLAUDE.md: 変更なし"*) ok "CLAUDE.md: 同一なら再書き込みしない(冪等)" ;; *) ng "CLAUDE.md 冪等でない: [$ocm2]" ;; esac
+# (3) 管理ブロック更新: ブロック外のユーザー追記は保持しつつ、ブロック内だけ最新へ復元
+printf '\n## ブロック外メモ\n- foo\n' >> "$DCM/CLAUDE.md"
+sed -i.bak 's/^# グローバル方針(トークン倹約)/# 改ざん見出し/' "$DCM/CLAUDE.md" 2>/dev/null || sed -i '' 's/^# グローバル方針(トークン倹約)/# 改ざん見出し/' "$DCM/CLAUDE.md"
+rm -f "$DCM/CLAUDE.md.bak"
+CLAUDE_CONFIG_DIR="$DCM" bash "$INSTALL" </dev/null >/dev/null 2>&1
+grep -q "ブロック外メモ" "$DCM/CLAUDE.md" && ok "CLAUDE.md: 管理ブロック外の追記は保持" || ng "ブロック外の追記が消えた"
+grep -q "^# グローバル方針(トークン倹約)" "$DCM/CLAUDE.md" && ok "CLAUDE.md: 管理ブロック内は最新テンプレへ復元" || ng "ブロック内が復元されない"
+# (4) マーカー無しの旧テンプレ → 管理ブロックへ移行(方針見出しは重複しない)
+DCM2="$SB/claudemd2"; mkdir -p "$DCM2"
+cp "$ROOT/home/CLAUDE.md" "$DCM2/CLAUDE.md"
+CLAUDE_CONFIG_DIR="$DCM2" bash "$INSTALL" </dev/null >/dev/null 2>&1
+grep -qF "claude-settings managed" "$DCM2/CLAUDE.md" && ok "CLAUDE.md: 旧テンプレ(マーカー無)を管理ブロックへ移行" || ng "旧テンプレが移行されない"
+hc=$(grep -c "^# グローバル方針(トークン倹約)" "$DCM2/CLAUDE.md"); [ "$hc" = "1" ] && ok "CLAUDE.md: 移行で方針が重複しない(見出し1つ)" || ng "移行で重複した(見出し $hc 個)"
 
 echo "== 9. トークン見積り(日本語) =="
 printf 'これは日本語のテストです。' > "$SB/jp.txt"

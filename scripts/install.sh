@@ -56,8 +56,9 @@ count=0; updated=0; skipped=0
 while IFS= read -r -d '' f; do
   rel="${f#"$SRC"/}"
   dest="$DST/$rel"
-  # settings.json はマージ処理で個別に扱う(ここでは触れない)
-  [ "$rel" = "settings.json" ] && continue
+  # settings.json と CLAUDE.md はユーザーの内容なので個別に扱う(ここでは触れない)。
+  # それ以外(statusline・hooks・skills 等)はテンプレート所有物なので更新で上書きしてよい。
+  { [ "$rel" = "settings.json" ] || [ "$rel" = "CLAUDE.md" ]; } && continue
   count=$((count + 1))
   # 内容が同一なら丸ごとスキップ(コピーもバックアップもしない=不要な mtime 更新を避ける)
   if [ -e "$dest" ] && cmp -s "$f" "$dest"; then
@@ -75,7 +76,57 @@ done < <(find "$SRC" -type f -print0)
 chmod +x "$DST/statusline.sh" 2>/dev/null || true
 find "$DST/hooks" "$DST/skills" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
 
-echo "導入完了: 更新 ${updated} / 変更なし ${skipped}(settings.json を除く計 ${count} files)→ $DST"
+echo "導入完了: 更新 ${updated} / 変更なし ${skipped}(settings.json・CLAUDE.md を除く計 ${count} files)→ $DST"
+
+# ---- CLAUDE.md: 管理ブロック方式で更新(あなたの記述を保持)-----------------------
+# CLAUDE.md はユーザーのグローバルメモリ(自由記述)なので、丸ごと上書きしない。
+# テンプレのコスト方針を BEGIN/END マーカーで囲んだ「管理ブロック」として扱い:
+#   - 既存にマーカーがある      → その中身だけ最新テンプレへ差し替え(ブロック外は保持)
+#   - マーカー無しだが旧テンプレ  → マーカー付きへ移行(以後は差分更新)
+#   - ユーザー独自の CLAUDE.md   → 内容を保持し、管理ブロックを末尾に追加(上書きしない)
+# 同一結果ならスキップ。差分があるときだけ退避してから書き込む。
+CLAUDE_MD_BEGIN='<!-- >>> claude-settings managed (トークン倹約グローバル方針・自動更新) >>> -->'
+CLAUDE_MD_END='<!-- <<< claude-settings managed <<< -->'
+merge_claude_md() {
+  local tpl="$SRC/CLAUDE.md" dst="$DST/CLAUDE.md" newf mode
+  [ -f "$tpl" ] || return 0
+  if [ ! -f "$dst" ]; then
+    { printf '%s\n' "$CLAUDE_MD_BEGIN"; cat "$tpl"; printf '%s\n' "$CLAUDE_MD_END"; } > "$dst"
+    echo "CLAUDE.md を新規配置しました(コスト方針を管理ブロックとして)。"
+    return 0
+  fi
+  if grep -qF "$CLAUDE_MD_BEGIN" "$dst"; then mode=update
+  elif head -n 20 "$dst" | grep -q '^# グローバル方針(トークン倹約)'; then mode=migrate
+  else mode=append; fi
+  newf=$(mktemp)
+  case "$mode" in
+    update)
+      awk -v b="$CLAUDE_MD_BEGIN" -v e="$CLAUDE_MD_END" -v tf="$tpl" '
+        $0==b { print; while((getline l < tf) > 0) print l; close(tf); skip=1; next }
+        $0==e { skip=0; print; next }
+        skip==1 { next }
+        { print }
+      ' "$dst" > "$newf" ;;
+    migrate)
+      { printf '%s\n' "$CLAUDE_MD_BEGIN"; cat "$tpl"; printf '%s\n' "$CLAUDE_MD_END"; } > "$newf" ;;
+    append)
+      { cat "$dst"; printf '\n%s\n' "$CLAUDE_MD_BEGIN"; cat "$tpl"; printf '%s\n' "$CLAUDE_MD_END"; } > "$newf" ;;
+  esac
+  if cmp -s "$newf" "$dst"; then
+    rm -f "$newf"
+    echo "CLAUDE.md: 変更なし。スキップしました。"
+  else
+    mkdir -p "$BK"; cp -p "$dst" "$BK/CLAUDE.md" 2>/dev/null || true
+    mv "$newf" "$dst"
+    case "$mode" in
+      update)  echo "CLAUDE.md: 管理ブロックのみ最新化しました(ブロック外のあなたの記述は保持)。" ;;
+      migrate) echo "CLAUDE.md: 旧テンプレを管理ブロックへ移行しました(以後は差分のみ更新)。" ;;
+      append)  echo "CLAUDE.md: あなたの既存内容を保持し、コスト方針を管理ブロックとして末尾に追加しました(不要なら該当ブロックを削除)。" ;;
+    esac
+  fi
+}
+merge_claude_md
+# -----------------------------------------------------------------------------
 
 # ---- マージ方針(コンフリクトの勝敗)------------------------------------------
 # 既定は「あなたの既存値を優先(keep)」。テンプレートは“守り”(hooks・deny リスト・

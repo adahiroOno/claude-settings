@@ -134,9 +134,11 @@ merge_claude_md() {
     echo "CLAUDE.md を新規配置しました(コスト方針を管理ブロックとして)。"
     return 0
   fi
-  if grep -qF "$CLAUDE_MD_BEGIN" "$dst"; then mode=update
+  # update は BEGIN と END の**両方**が揃っているときだけ。片方だけ(マーカー破損)なら
+  # ブロック範囲が確定できず awk が末尾を巻き込んで消しかねないので、安全側の append にする。
+  if grep -qF "$CLAUDE_MD_BEGIN" "$dst" && grep -qF "$CLAUDE_MD_END" "$dst"; then mode=update
   elif cmp -s "$tpl" "$dst"; then mode=wrap         # 現行テンプレと完全一致 → 追記ゼロなので安全に囲む
-  else mode=append; fi                              # 追記/独自記述あり → 消さずに末尾追加のみ
+  else mode=append; fi                              # 追記/独自記述あり・マーカー破損 → 消さずに末尾追加のみ
   newf=$(mktemp)
   case "$mode" in
     update)

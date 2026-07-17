@@ -375,6 +375,13 @@ grep -qF "claude-settings managed" "$DCM3/CLAUDE.md" && ok "CLAUDE.md: 追記を
 # 2回目は冪等(追記も維持)
 CLAUDE_CONFIG_DIR="$DCM3" bash "$INSTALL" </dev/null >/dev/null 2>&1
 grep -q "秘密の設定X" "$DCM3/CLAUDE.md" && ok "CLAUDE.md: 再実行しても追記が維持される(冪等)" || ng "再実行で追記が消えた"
+# (6) マーカー破損(END欠落)でも巻き込み削除しない(update は両マーカー必須)
+DCM4="$SB/claudemd4"; mkdir -p "$DCM4"
+CLAUDE_CONFIG_DIR="$DCM4" bash "$INSTALL" </dev/null >/dev/null 2>&1   # 正常な管理ブロック生成
+printf '\n## 末尾の独自メモ\n- 大事な情報Z\n' >> "$DCM4/CLAUDE.md"    # ブロック外に追記
+grep -v 'claude-settings managed <<<' "$DCM4/CLAUDE.md" > "$DCM4/.c2" && mv "$DCM4/.c2" "$DCM4/CLAUDE.md"  # END だけ削除=破損
+CLAUDE_CONFIG_DIR="$DCM4" bash "$INSTALL" </dev/null >/dev/null 2>&1
+grep -q "大事な情報Z" "$DCM4/CLAUDE.md" && ok "CLAUDE.md: マーカー破損(片側欠落)でも既存を巻き込み削除しない" || ng "★データ損失★ 破損マーカーで末尾が消えた"
 # マニフェスト方式: あなたが編集した statusline/hooks/skills を上書きしない
 DMAN="$SB/manifest"; mkdir -p "$DMAN"
 CLAUDE_CONFIG_DIR="$DMAN" bash "$INSTALL" </dev/null >/dev/null 2>&1     # 初回配置(manifest 作成)
